@@ -1,0 +1,61 @@
+name: sync-claude-config
+
+# sync/ の内容を、sync-targets.json に書いたリポジトリへ PR として配る
+on:
+  push:
+    branches: [main]
+    paths: ["sync/**", "sync-targets.json"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      repos: ${{ steps.read.outputs.repos }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        run: echo "repos=$(jq -c '.repos' sync-targets.json)" >> "$GITHUB_OUTPUT"
+
+  sync:
+    needs: targets
+    if: needs.targets.outputs.repos != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: ${{ fromJSON(needs.targets.outputs.repos) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: standards
+
+      - id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+          repositories: ${{ matrix.repo }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/${{ matrix.repo }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: target
+
+      - name: Copy managed files
+        run: cp -R standards/sync/. target/
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          path: target
+          token: ${{ steps.app-token.outputs.token }}
+          branch: chore/sync-claude-config
+          title: "chore: 共通 Claude 設定の同期"
+          body: |
+            ${{ github.repository }} の ${{ github.sha }} を反映します。
+            管理対象のファイル（REVIEW.md、.claude/rules/team-*.md）以外は変更しません。
+          labels: claude-config-sync

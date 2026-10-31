@@ -1,0 +1,9 @@
+{
+  "name": "lint-standards",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "picomatch": "^4.0.2",
+    "yaml": "^2.6.0"
+  }
+}

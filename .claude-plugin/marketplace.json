@@ -1,0 +1,11 @@
+{
+  "name": "cosmos",
+  "owner": { "name": "Shi-Shi-Ki" },
+  "plugins": [
+    {
+      "name": "team-dev",
+      "source": "./plugins/team-dev",
+      "description": "チーム共通の skills / hooks"
+    }
+  ]
+}

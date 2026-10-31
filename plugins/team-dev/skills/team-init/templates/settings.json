@@ -1,0 +1,33 @@
+{
+  "extraKnownMarketplaces": {
+    "cosmos": {
+      "source": { "source": "github", "repo": "Shi-Shi-Ki/cosmos" }
+    }
+  },
+  "enabledPlugins": {
+    "team-dev@cosmos": true
+  },
+  "permissions": {
+    "deny": [
+      "Bash(terraform apply:*)",
+      "Bash(terraform destroy:*)",
+      "Bash(clasp deploy:*)",
+      "Bash(clasp push:*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/*.tfvars)",
+      "Read(./**/.clasprc.json)"
+    ],
+    "allow": [
+      "Bash(pnpm test:*)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm typecheck:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run lint:*)",
+      "Bash(terraform fmt:*)",
+      "Bash(terraform validate:*)",
+      "Bash(terraform plan:*)",
+      "Bash(tflint:*)"
+    ]
+  }
+}
