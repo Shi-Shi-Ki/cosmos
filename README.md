@@ -53,14 +53,14 @@ cosmos/
 ## 各リポジトリでやること（導入時に 1 回）
 
 1. 同期 PR（`chore: 共通 Claude 設定の同期`）をマージする。REVIEW.md と `.claude/rules/team-*.md` が入ります。
-2. VS Code の Claude Code で plugin を入れる。
+2. Claude Code（CLI または VS Code）で plugin を入れる。先頭の `/` を付けてコマンドとして実行する（付けないと Claude への依頼として扱われる）。
 
    ```
    /plugin marketplace add Shi-Shi-Ki/cosmos
    /plugin install team-dev@cosmos
    ```
 
-3. `/team-init` を実行し、CLAUDE.md と `.claude/settings.json` を生成してコミットする。以降は settings.json に書かれた marketplace から、他のメンバーにも plugin のインストールが促されます。
+3. 対象リポジトリで `/team-dev:team-init` を実行し、CLAUDE.md と `.claude/settings.json` を生成してコミットする。以降は settings.json に書かれた marketplace から、他のメンバーにも plugin のインストールが促されます。
 4. 固有のレビュー観点があれば、サブディレクトリの REVIEW.md（例: `infra/REVIEW.md`）か `.claude/rules/local-*.md` に書く。
 
 ## ルールを変更するとき
