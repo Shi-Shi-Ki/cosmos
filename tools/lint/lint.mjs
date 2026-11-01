@@ -1,5 +1,5 @@
 // 中央で管理する md と plugin の形式チェック。リポジトリのルートで実行する。
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from "node:fs";
 import picomatch from "picomatch";
 import { parse } from "yaml";
 
@@ -20,6 +20,7 @@ const SCRIPTS_DIR = "plugins/team-dev/scripts";
 
 const errors = [];
 const warnings = [];
+const stale = []; // 見直し期限を過ぎたルールのパス（月次の見直しで使う）
 const lineCount = (text) => text.trimEnd().split("\n").length;
 
 // ルール: frontmatter（owner / last-reviewed / paths）、行数、管理対象の目印
@@ -38,6 +39,7 @@ for (const file of readdirSync(RULES_DIR).filter((f) => f.endsWith(".md"))) {
     errors.push(`${file}: last-reviewed が日付ではありません`);
   } else if ((Date.now() - new Date(meta["last-reviewed"])) / 86_400_000 > STALE_DAYS) {
     warnings.push(`${file}: ${STALE_DAYS} 日以上見直されていません`);
+    stale.push(`${RULES_DIR}/${file}`);
   }
   for (const p of [].concat(meta.paths ?? [])) {
     try {
@@ -75,6 +77,9 @@ for (const file of readdirSync(SCRIPTS_DIR)) {
     errors.push(`${SCRIPTS_DIR}/${file}: 実行権限がありません`);
   }
 }
+
+// STALE_REPORT にパスを渡すと、見直し期限を過ぎたルールの一覧を JSON で書き出す
+if (process.env.STALE_REPORT) writeFileSync(process.env.STALE_REPORT, JSON.stringify(stale));
 
 warnings.forEach((w) => console.log(`::warning::${w}`));
 errors.forEach((e) => console.log(`::error::${e}`));

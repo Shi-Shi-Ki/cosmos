@@ -23,7 +23,8 @@ cosmos/
    ├─ CODEOWNERS
    └─ workflows/
       ├─ sync.yml                       sync/ を各リポジトリへ PR
-      └─ lint-standards.yml             PR・main・毎月 1 日に形式チェック
+      ├─ lint-standards.yml             PR・main で形式チェック
+      └─ refresh-standards.yml          毎月 1 日に内容を見直し、修正 PR を作る
 ```
 
 フェーズ 2 以降（AI レビューのワークフロー、Slack 通知、ルール適用チェック、見逃しからのルール提案、MCP、指摘の月次集計、回帰テスト、最新動向の取り込み）は、設計ドキュメントの「実装の順番」に従って追加します。
@@ -36,6 +37,8 @@ cosmos/
 2. **このリポジトリに Variables / Secrets を登録する**（Settings → Secrets and variables → Actions）
    - Variables: `SYNC_APP_ID`（App ID）
    - Secrets: `SYNC_APP_PRIVATE_KEY`（App の秘密鍵）
+   - Secrets: `CLAUDE_CODE_OAUTH_TOKEN`（月次見直し用。Team プランのアカウントでログインした状態で `claude setup-token` を実行して発行する）
+   - GitHub App は、同期先に加えてこのリポジトリ自身にもインストールする（月次見直しの PR を作るため）
 3. **main を保護する**（Settings → Branches）
    - Require a pull request before merging、Require review from Code Owners
    - Require status checks: `lint`
@@ -69,6 +72,15 @@ cosmos/
 - ルールを見直したら、frontmatter の `last-reviewed` を更新する。180 日を超えると警告が出ます。
 - 上限: ルール 1 ファイル 40 行、REVIEW.md 150 行。超えたら分割するか削る。
 - マージすると `sync.yml` が同期先の全リポジトリへ PR を出します。
+
+## 月次の見直し（refresh-standards.yml）
+
+毎月 1 日 9:00（日本時間）に、Claude が `sync/REVIEW.md` と `team-*.md` を最新の公式情報と照らして見直します。Actions タブの Run workflow から手動でも実行できます。
+
+- 直すべき点があれば、PR（`chore/refresh-standards`）を作ります。本文に、変更点と根拠の URL、人間が判断すべき点が書かれます。CODEOWNERS にレビューが依頼されるので、根拠を確かめてマージしてください。
+- `last-reviewed` から 180 日を過ぎたルールは全項目を確認し、問題がなければ日付だけを更新する PR になります。マージした時点で、人間の見直しが済んだ扱いです。
+- 直す点がなく、判断が必要な点だけがあれば Issue を、実行が失敗すれば失敗の Issue を作ります。何もなければ何も作りません。
+- 実行には `CLAUDE_CODE_OAUTH_TOKEN` を発行した人の Team の利用枠を使います。トークンは発行した人に紐づくので、退職・異動のときは再発行してください。
 
 ## 注意
 
