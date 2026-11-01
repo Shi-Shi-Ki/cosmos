@@ -1,7 +1,10 @@
 {
   "extraKnownMarketplaces": {
     "cosmos": {
-      "source": { "source": "github", "repo": "Shi-Shi-Ki/cosmos" }
+      "source": {
+        "source": "github",
+        "repo": "Shi-Shi-Ki/cosmos"
+      }
     }
   },
   "enabledPlugins": {
@@ -14,7 +17,10 @@
       "Bash(clasp deploy:*)",
       "Bash(clasp push:*)",
       "Read(./.env)",
-      "Read(./.env.*)",
+      "Read(./.env.local)",
+      "Read(./.env.*.local)",
+      "Read(./.env.production)",
+      "Read(./.env.staging)",
       "Read(./**/*.tfvars)",
       "Read(./**/.clasprc.json)"
     ],
