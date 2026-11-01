@@ -1,0 +1,120 @@
+name: claude-fix (reusable)
+
+# 各リポジトリの team-claude-fix.yml から呼ばれる共通の修正処理。
+# PR のコメント「@claude fix [追加の指示]」で起動し、レビュー指摘を直した修正 PR を、元の PR のブランチに向けて作る。
+# 元の PR には直接 push しない。
+# 呼び出し側の job で permissions（contents/pull-requests/issues: write, id-token: write）と secrets: inherit を指定する。
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "24"
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+jobs:
+  claude-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - id: pr
+        name: 対象 PR のブランチを調べる
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefName,isCrossRepository > pr.json
+          if [ "$(jq -r .isCrossRepository pr.json)" = "true" ]; then
+            echo "fork からの PR には対応しません" >&2
+            exit 1
+          fi
+          echo "head=$(jq -r .headRefName pr.json)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head }}
+
+      - uses: actions/setup-node@v4
+        if: hashFiles('package.json') != ''
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: 依存を入れる
+        if: hashFiles('pnpm-lock.yaml') != ''
+        run: |
+          npm install -g pnpm@10
+          pnpm install --frozen-lockfile
+
+      - name: Claude で修正する
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          claude_args: >-
+            --max-turns 60
+            --allowedTools "Read,Glob,Grep,Edit,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/comments:*),Bash(pnpm lint:*),Bash(pnpm test:*),Bash(pnpm exec tsc --noEmit:*),Bash(terraform fmt:*)"
+          prompt: |
+            ${{ github.repository }} の PR #${{ github.event.issue.number }} を修正してください。日本語で作業します。
+
+            ## やること
+            1. 次のコマンドで、PR の差分とレビュー指摘（Claude のレビューを含む）を確認する。
+               - `gh pr diff ${{ github.event.issue.number }}`
+               - `gh pr view ${{ github.event.issue.number }} --comments`
+               - `gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/comments`（行ごとの指摘）
+            2. 指摘のうち、正しいと確認できたものだけを直す。誤った指摘、判断が必要な指摘は直さずに報告する。
+            3. 直したら、package.json があれば型チェック・lint・テストを実行し、すべて通ることを確かめる。
+               テストを削除・スキップして通すことはしない。
+            4. CLAUDE.md と .claude/rules/ の規約に従う。依存パッケージの追加はしない。
+
+            ## 追加の指示（コメントに書かれたもの。空なら無視する）
+            ${{ github.event.comment.body }}
+
+            ## 最後に
+            リポジトリのルートに `claude-fix-summary.md` を次の形で書く（修正 PR の本文になる）。
+            ```
+            ## 直したこと
+            - <ファイル>: <どの指摘をどう直したか>
+            ## 直さなかったこと
+            - <指摘>: <理由>
+            ## 確認
+            - <実行したコマンドと結果>
+            ```
+
+      - id: summary
+        name: まとめを取り出す
+        run: |
+          if [ -f claude-fix-summary.md ]; then mv claude-fix-summary.md "$RUNNER_TEMP/summary.md"; else echo "（まとめが作られませんでした）" > "$RUNNER_TEMP/summary.md"; fi
+          printf '\n---\n元の PR: #%s（このPRをマージすると、元の PR のブランチに修正が入ります）\n' "${{ github.event.issue.number }}" >> "$RUNNER_TEMP/summary.md"
+
+      - id: cpr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ github.token }}
+          base: ${{ steps.pr.outputs.head }}
+          branch: claude/fix-pr-${{ github.event.issue.number }}
+          commit-message: "fix: PR #${{ github.event.issue.number }} のレビュー指摘を修正"
+          title: "fix: PR #${{ github.event.issue.number }} のレビュー指摘を修正"
+          body-path: ${{ runner.temp }}/summary.md
+
+      - name: 元の PR に結果を書く
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+          URL: ${{ steps.cpr.outputs.pull-request-url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          STATUS: ${{ job.status }}
+        run: |
+          if [ "$STATUS" != "success" ]; then
+            body="修正に失敗しました。ログ: $RUN_URL"
+          elif [ -n "$URL" ]; then
+            body="修正 PR を作りました: $URL"
+          else
+            body="直す必要のある指摘はありませんでした。ログ: $RUN_URL"
+          fi
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"

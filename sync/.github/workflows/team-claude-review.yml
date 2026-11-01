@@ -1,0 +1,21 @@
+# Shi-Shi-Ki/cosmos で管理。このリポジトリでは編集しない
+# PR に「@claude review [範囲・観点]」とコメントすると、Claude が日本語でレビューコメントを付ける。
+name: team-claude-review
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  review:
+    if: |
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '@claude review') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    uses: Shi-Shi-Ki/cosmos/.github/workflows/claude-review.yml@main
+    secrets: inherit

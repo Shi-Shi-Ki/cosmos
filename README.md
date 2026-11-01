@@ -16,7 +16,8 @@ cosmos/
 │  └─ scripts/{format.sh,aws-guard.sh}
 ├─ sync/                                全リポジトリへそのままコピー
 │  ├─ REVIEW.md                         Code Review の基準
-│  └─ .claude/rules/team-*.md           general / ts / gas / terraform
+│  ├─ .claude/rules/team-*.md           general / ts / gas / terraform / deps
+│  └─ .github/workflows/team-*.yml      下の共通 workflow を呼ぶだけの短いファイル
 ├─ sync-targets.json                    同期先のリポジトリ一覧
 ├─ tools/lint/                          sync/ と plugin の形式チェック
 └─ .github/
@@ -24,7 +25,10 @@ cosmos/
    └─ workflows/
       ├─ sync.yml                       sync/ を各リポジトリへ PR
       ├─ lint-standards.yml             PR・main で形式チェック
-      └─ refresh-standards.yml          毎月 1 日に内容を見直し、修正 PR を作る
+      ├─ refresh-standards.yml          毎月 1 日に内容を見直し、修正 PR を作る
+      ├─ claude-review.yml              共通: @claude review（日本語でコメントのみ）
+      ├─ claude-fix.yml                 共通: @claude fix（修正 PR を作る）
+      └─ ci.yml                         共通: 型・lint・format・テスト・Terraform・秘密情報
 ```
 
 フェーズ 2 以降（AI レビューのワークフロー、Slack 通知、ルール適用チェック、見逃しからのルール提案、MCP、指摘の月次集計、回帰テスト、最新動向の取り込み）は、設計ドキュメントの「実装の順番」に従って追加します。
@@ -32,7 +36,7 @@ cosmos/
 ## 初回セットアップ（このリポジトリ側で 1 回）
 
 1. **GitHub App を作る**（個人アカウントの Settings → Developer settings → GitHub Apps）
-   - Repository permissions: Contents = Read and write、Pull requests = Read and write
+   - Repository permissions: Contents = Read and write、Pull requests = Read and write、Issues = Read and write、Workflows = Read and write（`sync/.github/workflows` を配るため）
    - 作成後、同期先のリポジトリにインストールする
 2. **このリポジトリに Variables / Secrets を登録する**（Settings → Secrets and variables → Actions）
    - Variables: `SYNC_APP_ID`（App ID）
@@ -55,7 +59,9 @@ cosmos/
 
 ## 各リポジトリでやること（導入時に 1 回）
 
-1. 同期 PR（`chore: 共通 Claude 設定の同期`）をマージする。REVIEW.md と `.claude/rules/team-*.md` が入ります。
+1. 同期 PR（`chore: 共通 Claude 設定の同期`）をマージする。REVIEW.md、`.claude/rules/team-*.md`、`.github/workflows/team-*.yml` が入ります。
+   - workflow を動かすには、そのリポジトリの Secrets に `CLAUDE_CODE_OAUTH_TOKEN` を登録し、https://github.com/apps/claude をインストールする。
+   - `@claude fix` を使うには、Settings → Actions → General で「Allow GitHub Actions to create and approve pull requests」を有効にする。
 2. Claude Code（CLI または VS Code）で plugin を入れる。先頭の `/` を付けてコマンドとして実行する（付けないと Claude への依頼として扱われる）。
 
    ```
@@ -82,9 +88,23 @@ cosmos/
 - 直す点がなく、判断が必要な点だけがあれば Issue を、実行が失敗すれば失敗の Issue を作ります。何もなければ何も作りません。
 - 実行には `CLAUDE_CODE_OAUTH_TOKEN` を発行した人の Team の利用枠を使います。トークンは発行した人に紐づくので、退職・異動のときは再発行してください。
 
+## 共通 workflow（@claude review / @claude fix / CI）
+
+処理の本体は cosmos の `.github/workflows/{claude-review,claude-fix,ci}.yml`（reusable workflow）にあり、各リポジトリには呼び出すだけの `team-*.yml` が同期されます。本体を直してマージすれば、全リポジトリに次の実行から反映されます（`@main` を参照しているため）。
+
+| PR へのコメント | 動き |
+| --- | --- |
+| `@claude review` | 全体をレビューし、日本語でコメントする。コードは変更しない |
+| `@claude review terraform/ だけ` | 後ろの文で範囲・観点を絞る |
+| `@claude fix [追加の指示]` | 指摘を直した修正 PR を、元の PR のブランチに向けて作る |
+
+- 反応するのは、リポジトリのオーナー・メンバー・共同編集者のコメントだけです。
+- 本体の変更は全リポジトリに即座に効くので、PR で慎重にレビューしてください。
+- 業務の Organization で private のまま使う場合は、cosmos の Settings → Actions → General → Access で、同じ Organization のリポジトリからの利用を許可する必要があります。
+
 ## 注意
 
-- 各リポジトリの REVIEW.md と `.claude/rules/team-*.md` は同期で上書きされます。直接編集しないでください。
+- 各リポジトリの REVIEW.md、`.claude/rules/team-*.md`、`.github/workflows/team-*.yml` は同期で上書きされます。直接編集しないでください。
 - Code Review は PR のベースブランチにある REVIEW.md を読みます。同期 PR をマージするまで、新しい基準は効きません。
 - `aws-guard.sh` は、Claude が実行する aws コマンドを調べ、参照系（describe / list / get など）以外なら実行前に承認を求めます。`--with-decryption` は拒否します。`bash -c "..."` や `--profile` 付きの書き方も判定しますが、すべての書き方を防げるわけではありません。確実に止めたい操作は IAM の権限で止めてください。
 - `format.sh` は、各リポジトリに prettier / eslint（`node_modules/.bin`）、`terraform`、`shfmt` があるときだけ整形します。ないツールは飛ばします。

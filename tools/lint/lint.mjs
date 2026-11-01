@@ -58,6 +58,16 @@ const review = readFileSync(REVIEW_MD, "utf8");
 if (!review.includes(MANAGED_MARK)) errors.push("REVIEW.md: 管理対象の目印コメントがありません");
 if (lineCount(review) > MAX_REVIEW_LINES) errors.push(`REVIEW.md: ${MAX_REVIEW_LINES} 行を超えています`);
 
+// 同期する workflow（呼び出し側）: 管理対象の目印と team- の接頭辞
+const SYNC_WORKFLOWS_DIR = "sync/.github/workflows";
+if (existsSync(SYNC_WORKFLOWS_DIR)) {
+  for (const file of readdirSync(SYNC_WORKFLOWS_DIR)) {
+    const text = readFileSync(`${SYNC_WORKFLOWS_DIR}/${file}`, "utf8");
+    if (!file.startsWith("team-")) errors.push(`${file}: 同期する workflow は team- で始めてください（各リポジトリの既存の workflow を上書きしないため）`);
+    if (!text.includes(MANAGED_MARK)) errors.push(`${file}: 管理対象の目印コメントがありません`);
+  }
+}
+
 // plugin と設定の JSON が壊れていないか
 for (const file of JSON_FILES) {
   if (!existsSync(file)) {
