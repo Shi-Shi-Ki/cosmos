@@ -1,13 +1,11 @@
 name: lint-standards
 
 # 中央で管理する md と plugin の形式をチェックする。
-# 毎月 1 日にも実行し、変更がなくても古くなったルールを警告する
+# 月次の内容の見直しは refresh-standards.yml で行う
 on:
   pull_request:
   push:
     branches: [main]
-  schedule:
-    - cron: "0 0 1 * *"
   workflow_dispatch:
 
 permissions:
