@@ -15,6 +15,11 @@
 - docs/adr/ の status が accepted なのに「決定」欄が空のものは Important
 - 振る舞いを変える変更にテストが追加されているか
 
+## 依存パッケージ（package.json、lockfile、.npmrc、pnpm-workspace.yaml の変更のみ）
+- lockfile に、package.json の変更から説明できない新しいパッケージが増えているものは Important
+- install スクリプトの許可（onlyBuiltDependencies への追加、ignore-scripts の解除）は Important
+- `minimumReleaseAge` の削除・短縮、CI の `--frozen-lockfile` / `npm ci` の解除は Important
+
 ## Terraform（*.tf の変更のみ）
 - IAM の Action / Resource のワイルドカード、0.0.0.0/0 の ingress、public なバケットは Important
 - lifecycle / moved なしのリソース名変更は Important（再作成が起きるため）
@@ -29,5 +34,6 @@
 - 外部入力を eval / コマンド置換に渡しているものは Important
 
 ## 指摘しないもの
-- 生成ファイル（dist/, *.gen.ts）、*.lock、.terraform.lock.hcl
+- 生成ファイル（dist/, *.gen.ts）、.terraform.lock.hcl
+- lockfile の 1 行ずつの内容（依存パッケージの節で見るのは、パッケージの増減と版の変化だけ）
 - formatter / linter が検出する内容（CI で担保済み）
