@@ -24,6 +24,7 @@
 - `terraform apply` / `clasp deploy` を実行しない（人間が行う）
 - 新しい依存パッケージを追加する前に確認を取る
 - 設計判断（ライブラリ選定、データモデル変更、アーキテクチャ変更）は実装前に選択肢を提示し、docs/adr/ に ADR の下書きを作る
+- <例: AWS のリソースを変更しうるコマンド（create / update / delete / put / invoke / `ssm start-session` など）は、実行前にコマンドと影響範囲を提示して確認を取る。describe / list / get は確認なしで実行してよい。`--with-decryption` で SecureString を復号しない>
 - <リポジトリ固有の禁止事項>
 
 ## プロジェクト固有の注意点

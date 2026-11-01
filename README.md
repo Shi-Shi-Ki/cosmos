@@ -12,8 +12,8 @@ cosmos/
 ├─ plugins/team-dev/                    各自の Claude Code が読むもの
 │  ├─ .claude-plugin/plugin.json
 │  ├─ skills/team-init/                 各リポジトリの CLAUDE.md と settings.json を生成
-│  ├─ hooks/hooks.json                  編集後の自動整形
-│  └─ scripts/format.sh
+│  ├─ hooks/hooks.json                  編集後の自動整形、aws コマンドの確認
+│  └─ scripts/{format.sh,aws-guard.sh}
 ├─ sync/                                全リポジトリへそのままコピー
 │  ├─ REVIEW.md                         Code Review の基準
 │  └─ .claude/rules/team-*.md           general / ts / gas / terraform
@@ -74,4 +74,5 @@ cosmos/
 
 - 各リポジトリの REVIEW.md と `.claude/rules/team-*.md` は同期で上書きされます。直接編集しないでください。
 - Code Review は PR のベースブランチにある REVIEW.md を読みます。同期 PR をマージするまで、新しい基準は効きません。
+- `aws-guard.sh` は、Claude が実行する aws コマンドを調べ、参照系（describe / list / get など）以外なら実行前に承認を求めます。`--with-decryption` は拒否します。`bash -c "..."` や `--profile` 付きの書き方も判定しますが、すべての書き方を防げるわけではありません。確実に止めたい操作は IAM の権限で止めてください。
 - `format.sh` は、各リポジトリに prettier / eslint（`node_modules/.bin`）、`terraform`、`shfmt` があるときだけ整形します。ないツールは飛ばします。

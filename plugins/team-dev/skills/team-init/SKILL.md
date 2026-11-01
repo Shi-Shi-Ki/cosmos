@@ -34,8 +34,9 @@ disable-model-invocation: true
    - `team-*.md` がまだ同期されていない場合は、「セキュリティ上の懸念を指摘する」「秘密情報を書かない」のような全リポジトリ共通の内容も、共通ルールで扱うものとして移さない。
 5. `templates/settings.json` を元に `.claude/settings.json` を作る。
    - `allow` は、実際に使っているコマンドだけを残す（例: pnpm を使っていれば npm の行は消す、tflint を使っていなければ消す）。
-   - `deny` のテンプレートの行は消さない。
-   - CLAUDE.md の「禁止事項」のうち、コマンドやファイルで表せるものは `deny` にも追加する（例: `Read(./terraform/*.tfstate*)`、`Bash(docker compose down -v:*)`）。CLAUDE.md の記述はお願いにすぎず、`deny` に書いたものだけが確実に止まるため。
+   - `deny` のテンプレートの行は消さない。ただし、使っていないツールの行（例: GAS を使っていないリポジトリの `clasp`）は消す。
+   - AWS を使っていないリポジトリでは、`allow` の `aws` の行も消す。
+   - CLAUDE.md の「禁止事項」のうち、コマンドやファイルで表せるものは `deny` にも追加する（例: `Read(./terraform/*.tfstate*)`、`Bash(docker compose down -v:*)`）。CLAUDE.md の記述はお願いにすぎないため。ただし `deny` もコマンド文字列のパターン照合なので、`bash -c "..."` などの書き方ではすり抜ける。aws コマンドは plugin の hook（`aws-guard.sh`）でも確認しているので、settings.json だけで塞ごうとして `deny` を増やしすぎない。
    - 既に `.claude/settings.json` がある場合も、既存の行をそのまま残さず、上の基準で見直す（使っていないコマンドの `allow` を消す、禁止事項を `deny` に足す）。ユーザーが自分で足した行は消さない。判断がつかない行は残して報告する。
    - `.env.example` のようなサンプルファイルは読めるようにしておく（`Read(./.env.*)` のような広いパターンで塞がない）。
 6. 既存のファイルを変更する場合は、上書きせずに差分を示し、ユーザーの確認を取ってから反映する。

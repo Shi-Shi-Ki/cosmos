@@ -16,6 +16,7 @@
       "Bash(terraform destroy:*)",
       "Bash(clasp deploy:*)",
       "Bash(clasp push:*)",
+      "Bash(aws *--with-decryption*)",
       "Read(./.env)",
       "Read(./.env.local)",
       "Read(./.env.*.local)",
@@ -33,7 +34,12 @@
       "Bash(terraform fmt:*)",
       "Bash(terraform validate:*)",
       "Bash(terraform plan:*)",
-      "Bash(tflint:*)"
-    ]
+      "Bash(tflint:*)",
+      "Bash(aws * describe-*)",
+      "Bash(aws * list-*)",
+      "Bash(aws * get-*)",
+      "Bash(aws s3 ls:*)"
+    ],
+    "disableBypassPermissionsMode": "disable"
   }
 }
