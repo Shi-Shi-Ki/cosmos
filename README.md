@@ -120,6 +120,8 @@ cosmos/
 
 cosmos への PR ごとに、マージ前に次を自動で確かめます。どれかが失敗したら、その PR はマージしないでください。
 
+テストは jest などを使わない独自の作りです。各テストの流れ（何を入力して、何と比べるか）とケースの足し方は [tests/README.md](tests/README.md) にまとめています。
+
 | 種類 | 内容 | 場所 |
 | --- | --- | --- |
 | 静的チェック | workflow の構文・式・埋め込みの shell を actionlint と shellcheck で検査 | `.github/workflows/`, `sync/.github/workflows/` |
