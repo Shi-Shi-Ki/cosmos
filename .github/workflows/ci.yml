@@ -15,34 +15,58 @@ on:
       terraform-version:
         type: string
         default: "~1.9"
+      # 調べる対象のディレクトリ（末尾に / を付ける）。cosmos の結合テストでサンプルを指すときだけ使う
+      working-directory:
+        type: string
+        default: ""
+      # 失敗の内容を PR にコメントするか。結合テストでは false にする
+      comment:
+        type: boolean
+        default: true
+      # チェックが失敗してもジョブを成功扱いにし、結果は outputs だけで返す。結合テストで、わざと壊したサンプルを赤くしないために使う
+      allow-failure:
+        type: boolean
+        default: false
+    # 各チェックの結果（success / failure）。結合テストで期待どおりかを確かめるのに使う
+    outputs:
+      typescript:
+        value: ${{ jobs.typescript.outputs.result }}
+      terraform:
+        value: ${{ jobs.terraform.outputs.result }}
+      secrets:
+        value: ${{ jobs.secrets.outputs.result }}
 
 jobs:
   typescript:
     name: TypeScript（型チェック・lint・format・テスト）
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      result: ${{ steps.status.outputs.result }}
     defaults:
       run:
         shell: bash -eo pipefail {0}
+        working-directory: ${{ inputs.working-directory || '.' }}
     steps:
       - uses: actions/checkout@v4
 
       - run: mkdir -p "$RUNNER_TEMP/ci-logs" && echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
 
       - uses: pnpm/action-setup@v4
-        if: hashFiles('pnpm-lock.yaml') != ''
+        if: hashFiles(format('{0}pnpm-lock.yaml', inputs.working-directory)) != ''
         with:
           version: 10
 
       - uses: actions/setup-node@v4
-        if: hashFiles('package.json') != ''
+        if: hashFiles(format('{0}package.json', inputs.working-directory)) != ''
         with:
           node-version: ${{ inputs.node-version }}
 
       # lockfile どおりにだけ入れる
       - name: 依存を入れる
         id: deps
-        if: hashFiles('package.json') != ''
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: hashFiles(format('{0}package.json', inputs.working-directory)) != ''
         run: |
           if [ -f pnpm-lock.yaml ]; then echo "x=pnpm exec" >> "$GITHUB_OUTPUT"; echo "run=pnpm" >> "$GITHUB_OUTPUT"; pnpm install --frozen-lockfile 2>&1 | tee "$LOGS/deps.log"
           elif [ -f package-lock.json ]; then echo "x=npx --no-install" >> "$GITHUB_OUTPUT"; echo "run=npm" >> "$GITHUB_OUTPUT"; npm ci 2>&1 | tee "$LOGS/deps.log"
@@ -51,22 +75,26 @@ jobs:
 
       - name: 型チェック
         id: tsc
-        if: steps.deps.outcome == 'success' && hashFiles('tsconfig.json') != ''
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: steps.deps.outcome == 'success' && hashFiles(format('{0}tsconfig.json', inputs.working-directory)) != ''
         run: ${{ steps.deps.outputs.x }} tsc --noEmit 2>&1 | tee "$LOGS/tsc.log"
 
       # package.json の lint スクリプトは --fix 付きのことがあるため、CI では検出だけを行う
       - name: Lint
         id: eslint
-        if: (success() || failure()) && steps.deps.outcome == 'success' && hashFiles('eslint.config.*', '.eslintrc*') != ''
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: (success() || failure()) && steps.deps.outcome == 'success' && hashFiles(format('{0}eslint.config.*', inputs.working-directory), format('{0}.eslintrc*', inputs.working-directory)) != ''
         run: ${{ steps.deps.outputs.x }} eslint . 2>&1 | tee "$LOGS/eslint.log"
 
       - name: Format
         id: prettier
-        if: (success() || failure()) && steps.deps.outcome == 'success' && hashFiles('.prettierrc*', 'prettier.config.*') != ''
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: (success() || failure()) && steps.deps.outcome == 'success' && hashFiles(format('{0}.prettierrc*', inputs.working-directory), format('{0}prettier.config.*', inputs.working-directory)) != ''
         run: ${{ steps.deps.outputs.x }} prettier --check "**/*.{ts,tsx,js,jsx,mjs,cjs}" 2>&1 | tee "$LOGS/prettier.log"
 
       - name: テスト
         id: test
+        continue-on-error: ${{ inputs.allow-failure }}
         if: (success() || failure()) && steps.deps.outcome == 'success'
         run: |
           if jq -e '.scripts.test' package.json >/dev/null; then ${{ steps.deps.outputs.run }} test 2>&1 | tee "$LOGS/test.log"; else echo "test スクリプトがないため飛ばします"; fi
@@ -115,6 +143,10 @@ jobs:
             "手元で \`$RUN test\` を実行して、失敗しているテストを再現してください。仕様を変えた場合はテストを直し、そうでなければ実装を直します。"
           true
 
+      - id: status
+        if: always()
+        run: echo "result=${{ (job.status == 'failure' || contains(steps.*.outcome, 'failure')) && 'failure' || 'success' }}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -127,9 +159,12 @@ jobs:
     name: Terraform（fmt・validate）
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      result: ${{ steps.status.outputs.result }}
     defaults:
       run:
         shell: bash -eo pipefail {0}
+        working-directory: ${{ inputs.working-directory || '.' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -146,15 +181,17 @@ jobs:
 
       - name: fmt
         id: fmt
+        continue-on-error: ${{ inputs.allow-failure }}
         if: steps.tf.outputs.found == 'true'
-        working-directory: ${{ inputs.terraform-dir }}
+        working-directory: ${{ inputs.working-directory }}${{ inputs.terraform-dir }}
         run: terraform fmt -check -recursive 2>&1 | tee "$LOGS/fmt.log"
 
       # backend とクラウドには接続しない（認証情報は使わない）
       - name: validate
         id: validate
+        continue-on-error: ${{ inputs.allow-failure }}
         if: (success() || failure()) && steps.tf.outputs.found == 'true'
-        working-directory: ${{ inputs.terraform-dir }}
+        working-directory: ${{ inputs.working-directory }}${{ inputs.terraform-dir }}
         run: |
           terraform init -backend=false -input=false -no-color 2>&1 | tee "$LOGS/validate.log"
           terraform validate -no-color 2>&1 | tee -a "$LOGS/validate.log"
@@ -196,6 +233,10 @@ jobs:
           fi
           true
 
+      - id: status
+        if: always()
+        run: echo "result=${{ (job.status == 'failure' || contains(steps.*.outcome, 'failure')) && 'failure' || 'success' }}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -208,6 +249,11 @@ jobs:
     name: 秘密情報の検出
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      result: ${{ steps.status.outputs.result }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory || '.' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -216,6 +262,7 @@ jobs:
       # state や変数ファイルには、平文の秘密情報や構成情報が入るため、コミットさせない
       - name: tfstate / tfvars / .env がコミットされていないか
         id: tracked
+        continue-on-error: ${{ inputs.allow-failure }}
         run: |
           mkdir -p "$RUNNER_TEMP/ci-logs" && echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
           found=$(git ls-files '*.tfstate' '*.tfstate.*' '*.tfvars' '.env' '.env.*' '.clasprc.json' '*/.clasprc.json' | grep -vE '(^|/)\.env\.example$' || true)
@@ -228,6 +275,7 @@ jobs:
       # 結果はジョブのサマリーに出す。PR へのコメントは下でまとめて行う
       - uses: gitleaks/gitleaks-action@v2
         id: gitleaks
+        continue-on-error: ${{ inputs.allow-failure }}
         if: success() || failure()
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -275,6 +323,10 @@ jobs:
           fi
           true
 
+      - id: status
+        if: always()
+        run: echo "result=${{ (job.status == 'failure' || contains(steps.*.outcome, 'failure')) && 'failure' || 'success' }}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -288,7 +340,7 @@ jobs:
   report:
     name: 結果を PR にコメント
     needs: [typescript, terraform, secrets]
-    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: always() && inputs.comment && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

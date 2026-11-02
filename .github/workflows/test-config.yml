@@ -1,0 +1,101 @@
+name: test-config
+
+# cosmos の設定が意図どおりに動くかを、マージ前に確かめる。
+#   static : workflow の構文・式・埋め込みの shell を actionlint（+ shellcheck）で検査する
+#   unit   : aws-guard.sh の判定表と、CI 失敗コメントのスナップショットを確かめる
+#   e2e-*  : この PR 版の ci.yml を tests/ci-e2e/fixtures/ のサンプルに対して実行し、
+#            verify で各チェックの成功・失敗が期待どおりかを判定する
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-config-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install actionlint-py==1.7.12.25 shellcheck-py==0.11.0.1
+      - name: workflow を検査する
+        run: actionlint -color .github/workflows/*.yml sync/.github/workflows/*.yml
+
+  unit:
+    name: 単体テスト
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --prefix tools/lint
+      - name: aws-guard.sh
+        run: tests/aws-guard/run.sh
+      - name: CI 失敗コメント
+        run: node tests/ci-report/run.mjs
+
+  e2e-clean:
+    uses: ./.github/workflows/ci.yml
+    with:
+      working-directory: tests/ci-e2e/fixtures/clean/
+      comment: false
+      allow-failure: true
+
+  e2e-ts-type-error:
+    uses: ./.github/workflows/ci.yml
+    with:
+      working-directory: tests/ci-e2e/fixtures/ts-type-error/
+      comment: false
+      allow-failure: true
+
+  e2e-tf-fmt:
+    uses: ./.github/workflows/ci.yml
+    with:
+      working-directory: tests/ci-e2e/fixtures/tf-fmt/
+      comment: false
+      allow-failure: true
+
+  e2e-tracked-env:
+    uses: ./.github/workflows/ci.yml
+    with:
+      working-directory: tests/ci-e2e/fixtures/tracked-env/
+      comment: false
+      allow-failure: true
+
+  verify:
+    name: 結合テストの判定
+    needs: [e2e-clean, e2e-ts-type-error, e2e-tf-fmt, e2e-tracked-env]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 各チェックの結果が期待どおりか
+        env:
+          RESULTS: |
+            clean          ${{ needs.e2e-clean.outputs.typescript }} ${{ needs.e2e-clean.outputs.terraform }} ${{ needs.e2e-clean.outputs.secrets }}
+            ts-type-error  ${{ needs.e2e-ts-type-error.outputs.typescript }} ${{ needs.e2e-ts-type-error.outputs.terraform }} ${{ needs.e2e-ts-type-error.outputs.secrets }}
+            tf-fmt         ${{ needs.e2e-tf-fmt.outputs.typescript }} ${{ needs.e2e-tf-fmt.outputs.terraform }} ${{ needs.e2e-tf-fmt.outputs.secrets }}
+            tracked-env    ${{ needs.e2e-tracked-env.outputs.typescript }} ${{ needs.e2e-tracked-env.outputs.terraform }} ${{ needs.e2e-tracked-env.outputs.secrets }}
+          # サンプル  TypeScript  Terraform  秘密情報
+          EXPECTED: |
+            clean          success success success
+            ts-type-error  failure success success
+            tf-fmt         success failure success
+            tracked-env    success success failure
+        run: |
+          echo "期待:"; echo "$EXPECTED"
+          echo "実際:"; echo "$RESULTS"
+          if [ "$(echo "$RESULTS" | tr -s ' ')" != "$(echo "$EXPECTED" | tr -s ' ')" ]; then
+            echo "::error::ci.yml の結果が期待と違います。上の表を比べてください"
+            exit 1
+          fi

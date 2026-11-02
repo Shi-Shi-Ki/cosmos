@@ -1,0 +1,9 @@
+Initializing provider plugins...
+Terraform has been successfully initialized!
+
+Error: Reference to undeclared input variable
+
+  on ssm.tf line 4, in resource "aws_ssm_parameter" "slack_token":
+   4:   value = var.slack_tokn
+
+An input variable with the name "slack_tokn" has not been declared.

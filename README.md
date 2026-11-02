@@ -20,6 +20,7 @@ cosmos/
 │  └─ .github/workflows/team-*.yml      下の共通 workflow を呼ぶだけの短いファイル
 ├─ sync-targets.json                    同期先のリポジトリ一覧
 ├─ tools/lint/                          sync/ と plugin の形式チェック
+├─ tests/                               設定のテスト（aws-guard・CI 失敗コメント・CI の結合テスト）
 └─ .github/
    ├─ CODEOWNERS
    └─ workflows/
@@ -28,7 +29,8 @@ cosmos/
       ├─ refresh-standards.yml          毎月 1 日に内容を見直し、修正 PR を作る
       ├─ claude-review.yml              共通: @claude review（日本語でコメントのみ）
       ├─ claude-fix.yml                 共通: @claude fix（修正 PR を作る）
-      └─ ci.yml                         共通: 型・lint・format・テスト・Terraform・秘密情報
+      ├─ ci.yml                         共通: 型・lint・format・テスト・Terraform・秘密情報
+      └─ test-config.yml                cosmos 自身の設定のテスト
 ```
 
 フェーズ 2 以降（AI レビューのワークフロー、Slack 通知、ルール適用チェック、見逃しからのルール提案、MCP、指摘の月次集計、回帰テスト、最新動向の取り込み）は、設計ドキュメントの「実装の順番」に従って追加します。
@@ -102,6 +104,30 @@ cosmos/
 - 反応するのは、リポジトリのオーナー・メンバー・共同編集者のコメントだけです。
 - 本体の変更は全リポジトリに即座に効くので、PR で慎重にレビューしてください。
 - `sync/` の中では、このリポジトリを `{{COSMOS_REPO}}` と書きます。同期のときに、このリポジトリ名（owner/repo）に置き換わります。
+
+## 設定のテスト（test-config.yml）
+
+cosmos への PR ごとに、マージ前に次を自動で確かめます。どれかが失敗したら、その PR はマージしないでください。
+
+| 種類 | 内容 | 場所 |
+| --- | --- | --- |
+| 静的チェック | workflow の構文・式・埋め込みの shell を actionlint と shellcheck で検査 | `.github/workflows/`, `sync/.github/workflows/` |
+| 単体テスト | `aws-guard.sh` が各コマンドを許可・確認・拒否のどれにするか | `tests/aws-guard/cases.tsv` |
+| 単体テスト | CI 失敗コメントの文面（秘密情報の値を載せないことも確認） | `tests/ci-report/cases/` |
+| 結合テスト | PR 版の `ci.yml` をわざと壊したサンプルに対して実行し、成功・失敗が期待どおりか | `tests/ci-e2e/fixtures/` |
+
+手元で実行するとき:
+
+```sh
+npm ci --prefix tools/lint
+tests/aws-guard/run.sh
+node tests/ci-report/run.mjs
+pip install actionlint-py shellcheck-py && actionlint .github/workflows/*.yml sync/.github/workflows/*.yml
+```
+
+- `aws-guard.sh` の判定を変えたら、`cases.tsv` に「期待する判定 <TAB> コマンド」の行を足します。すり抜けを見つけたら、まずその行を足して失敗することを確かめてから直します。
+- CI 失敗コメントの文面を変えたら、`UPDATE=1 node tests/ci-report/run.mjs` で期待値を作り直し、差分を PR で確認します。
+- `@claude review` / `@claude fix` は出力が毎回変わるため、自動テストの対象外です。問題を仕込んだ PR でレビューさせ、指摘できたかを人が確認してください。
 
 ## 業務用に複製して使うとき
 

@@ -1,0 +1,8 @@
+{"runs":[{"results":[
+ {"ruleId":"slack-bot-token","message":{"text":"slack-bot-token has detected secret for file src/config.ts."},
+  "locations":[{"physicalLocation":{"artifactLocation":{"uri":"src/config.ts"},"region":{"startLine":12,"snippet":{"text":"DUMMY-VALUE-MUST-NOT-APPEAR"}}}}],
+  "partialFingerprints":{"commitSha":"033697b84b9cc3ad17788d46743a93134740dc0b","author":"T.T"}},
+ {"ruleId":"generic-api-key","message":{"text":"generic-api-key has detected secret for file README.md."},
+  "locations":[{"physicalLocation":{"artifactLocation":{"uri":"README.md"},"region":{"startLine":5,"snippet":{"text":"DUMMY-VALUE-2"}}}}],
+  "partialFingerprints":{"commitSha":"033697b84b9cc3ad17788d46743a93134740dc0b"}}
+]}]}

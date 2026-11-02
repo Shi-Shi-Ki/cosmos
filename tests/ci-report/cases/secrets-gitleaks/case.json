@@ -1,0 +1,1 @@
+{"job":"secrets","env":{"TRACKED":"success","GITLEAKS":"failure"},"mustNotContain":["DUMMY-VALUE-MUST-NOT-APPEAR","DUMMY-VALUE-2"]}
