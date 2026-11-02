@@ -32,6 +32,11 @@ on:
       allow-failure:
         type: boolean
         default: false
+    # 共通スクリプトを取得するための GitHub App の秘密鍵（任意）。cosmos が private のときに使う。
+    # 呼び出し側は secrets: inherit で渡し、App ID は Variables の SYNC_APP_ID に置く
+    secrets:
+      SYNC_APP_PRIVATE_KEY:
+        required: false
     # 各チェックの結果（success / failure）。結合テストで期待どおりかを確かめるのに使う
     outputs:
       typescript:
@@ -46,8 +51,58 @@ on:
         value: ${{ jobs.gas.outputs.result }}
 
 jobs:
+  # 各ジョブが使うスクリプト（scripts/ci/）を、呼ばれた cosmos の同じコミットから取得して配る。
+  # github.repository は呼び出し側を指すので、呼ばれた側は job.workflow_repository / job.workflow_sha で知る。
+  # cosmos を private にしたときは、呼び出し側の標準のトークンでは読めないため GitHub App のトークンを使う
+  # （Variables の SYNC_APP_ID と Secrets の SYNC_APP_PRIVATE_KEY があれば使い、なければ標準のトークン）。
+  scripts:
+    name: 共通スクリプトを取得
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 呼ばれた cosmos のリポジトリとコミットを調べる
+        id: source
+        env:
+          # actionlint がまだ job.workflow_* を知らないため、toJSON で受け取る
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          repo=$(jq -r '.workflow_repository // empty' <<<"$JOB_CONTEXT")
+          sha=$(jq -r '.workflow_sha // empty' <<<"$JOB_CONTEXT")
+          if [ -z "$repo" ] || [ -z "$sha" ]; then
+            echo "::error::呼ばれた cosmos のリポジトリとコミットを取得できませんでした"
+            exit 1
+          fi
+          echo "cosmos: $repo@$sha"
+          { echo "repo=$repo"; echo "sha=$sha"; echo "owner=${repo%%/*}"; echo "name=${repo#*/}"; } >> "$GITHUB_OUTPUT"
+
+      - id: app-token
+        if: vars.SYNC_APP_ID != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+          owner: ${{ steps.source.outputs.owner }}
+          repositories: ${{ steps.source.outputs.name }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.repo }}
+          ref: ${{ steps.source.outputs.sha }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          path: cosmos
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cosmos-scripts
+          path: cosmos/scripts/ci
+          if-no-files-found: error
+          retention-days: 1
+
   typescript:
     name: TypeScript（型チェック・lint・format・テスト）
+    needs: scripts
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -59,7 +114,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: mkdir -p "$RUNNER_TEMP/ci-logs" && echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: cosmos-scripts
+          path: ${{ runner.temp }}/cosmos-scripts
+
+      - name: 共通スクリプトとログの置き場所を用意する
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          { echo "LOGS=$RUNNER_TEMP/ci-logs"; echo "COSMOS_SCRIPTS=$RUNNER_TEMP/cosmos-scripts"; } >> "$GITHUB_ENV"
 
       - uses: pnpm/action-setup@v4
         if: hashFiles(format('{0}pnpm-lock.yaml', inputs.working-directory)) != ''
@@ -118,39 +181,7 @@ jobs:
           ESLINT: ${{ steps.eslint.outcome }}
           PRETTIER: ${{ steps.prettier.outcome }}
           TEST: ${{ steps.test.outcome }}
-        run: |
-          out="$LOGS/report.md"
-          section() { # $1: 見出し, $2: ログ, $3: 対応
-            {
-              echo "### ❌ $1"
-              echo
-              echo "$3"
-              echo
-              if [ -s "$2" ]; then
-                echo '<details><summary>エラーの抜粋</summary>'
-                echo
-                echo '```'
-                clean=$(sed 's/\x1b\[[0-9;]*m//g' "$2")
-                # エラーらしい行だけを出す。見つからなければ末尾を出す
-                hits=$(printf '%s\n' "$clean" | grep -E -i 'error|fail|warn|✕|●|\[warn\]' || true)
-                if [ -n "$hits" ]; then printf '%s\n' "$hits" | head -n 40; else printf '%s\n' "$clean" | tail -n 20; fi
-                echo '```'
-                echo '</details>'
-                echo
-              fi
-            } >> "$out"
-          }
-          [ "$DEPS" = failure ] && section "依存のインストール" "$LOGS/deps.log" \
-            "lockfile と package.json が一致していないか、lockfile がありません。手元で \`$RUN install\` を実行し、更新された lockfile をコミットしてください。"
-          [ "$TSC" = failure ] && section "型チェック（tsc）" "$LOGS/tsc.log" \
-            "抜粋の \`ファイル(行,列): error TSxxxx\` の箇所を直してください。手元では \`$X tsc --noEmit\` で確認できます。\`Cannot find module\` は import のパスか、依存の入れ忘れが原因のことが多いです。"
-          [ "$ESLINT" = failure ] && section "Lint（ESLint）" "$LOGS/eslint.log" \
-            "手元で \`$X eslint . --fix\` を実行すると、自動で直せるものは直ります。残ったものは抜粋のルール名を見て手で直してください。"
-          [ "$PRETTIER" = failure ] && section "Format（Prettier）" "$LOGS/prettier.log" \
-            "手元で \`$X prettier --write \"**/*.{ts,tsx,js,jsx,mjs,cjs}\"\` を実行し、結果をコミットしてください。"
-          [ "$TEST" = failure ] && section "テスト" "$LOGS/test.log" \
-            "手元で \`$RUN test\` を実行して、失敗しているテストを再現してください。仕様を変えた場合はテストを直し、そうでなければ実装を直します。"
-          true
+        run: bash "$COSMOS_SCRIPTS/report-typescript.sh"
 
       - id: status
         if: always()
@@ -166,6 +197,7 @@ jobs:
 
   terraform:
     name: Terraform（fmt・validate）
+    needs: scripts
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -177,9 +209,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: cosmos-scripts
+          path: ${{ runner.temp }}/cosmos-scripts
+
+      - name: 共通スクリプトとログの置き場所を用意する
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          { echo "LOGS=$RUNNER_TEMP/ci-logs"; echo "COSMOS_SCRIPTS=$RUNNER_TEMP/cosmos-scripts"; } >> "$GITHUB_ENV"
+
       - id: tf
         run: |
-          mkdir -p "$RUNNER_TEMP/ci-logs" && echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
           if ls "${{ inputs.terraform-dir }}"/*.tf >/dev/null 2>&1; then echo "found=true" >> "$GITHUB_OUTPUT"; fi
 
       - uses: hashicorp/setup-terraform@v3
@@ -211,36 +252,7 @@ jobs:
           DIR: ${{ inputs.terraform-dir }}
           FMT: ${{ steps.fmt.outcome }}
           VALIDATE: ${{ steps.validate.outcome }}
-        run: |
-          out="$LOGS/report.md"
-          if [ "$FMT" = failure ]; then
-            {
-              echo "### ❌ Terraform fmt"
-              echo
-              echo "次のファイルの書式が揃っていません。\`cd $DIR && terraform fmt -recursive\` を実行し、結果をコミットしてください。"
-              echo
-              echo '```'
-              head -n 40 "$LOGS/fmt.log"
-              echo '```'
-              echo
-            } >> "$out"
-          fi
-          if [ "$VALIDATE" = failure ]; then
-            {
-              echo "### ❌ Terraform validate"
-              echo
-              echo "構文・参照・型の誤りがあります。抜粋の \`Error:\` と \`on <ファイル> line <行>\` の箇所を直してください。手元では \`cd $DIR && terraform init -backend=false && terraform validate\` で確認できます。"
-              echo
-              echo '<details><summary>エラーの抜粋</summary>'
-              echo
-              echo '```'
-              grep -A6 -E '^(Error|│ Error)' "$LOGS/validate.log" | head -n 40 || true
-              echo '```'
-              echo '</details>'
-              echo
-            } >> "$out"
-          fi
-          true
+        run: bash "$COSMOS_SCRIPTS/report-terraform.sh"
 
       - id: status
         if: always()
@@ -256,6 +268,7 @@ jobs:
 
   secrets:
     name: 秘密情報の検出
+    needs: scripts
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -268,18 +281,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: cosmos-scripts
+          path: ${{ runner.temp }}/cosmos-scripts
+
+      - name: 共通スクリプトとログの置き場所を用意する
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          { echo "LOGS=$RUNNER_TEMP/ci-logs"; echo "COSMOS_SCRIPTS=$RUNNER_TEMP/cosmos-scripts"; } >> "$GITHUB_ENV"
+
       # state や変数ファイルには、平文の秘密情報や構成情報が入るため、コミットさせない
       - name: tfstate / tfvars / .env がコミットされていないか
         id: tracked
         continue-on-error: ${{ inputs.allow-failure }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/ci-logs" && echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
-          found=$(git ls-files '*.tfstate' '*.tfstate.*' '*.tfvars' '.env' '.env.*' '.clasprc.json' '*/.clasprc.json' | grep -vE '(^|/)\.env\.example$' || true)
-          if [ -n "$found" ]; then
-            printf '%s\n' "$found" > "$RUNNER_TEMP/ci-logs/tracked.txt"
-            echo "::error::コミットしてはいけないファイルがあります: $found"
-            exit 1
-          fi
+        run: bash "$COSMOS_SCRIPTS/check-tracked-files.sh"
 
       # 結果はジョブのサマリーに出す。PR へのコメントは下でまとめて行う
       - uses: gitleaks/gitleaks-action@v2
@@ -296,41 +312,7 @@ jobs:
         env:
           TRACKED: ${{ steps.tracked.outcome }}
           GITLEAKS: ${{ steps.gitleaks.outcome }}
-        run: |
-          out="$LOGS/report.md"
-          if [ "$TRACKED" = failure ]; then
-            {
-              echo "### ❌ コミットしてはいけないファイル"
-              echo
-              echo "state・変数ファイル・.env には、平文の秘密情報が入ります。次を行ってください。"
-              echo
-              echo "1. \`git rm --cached <ファイル>\` で追跡から外し、\`.gitignore\` に入っているか確認してコミットする（手元のファイルは消えません）。"
-              echo "2. 中に秘密情報（トークン・パスワード・鍵）が入っていた場合は、その値を無効化して作り直す。履歴に残るため、外すだけでは足りません。"
-              echo
-              echo '```'
-              head -n 20 "$LOGS/tracked.txt"
-              echo '```'
-              echo
-            } >> "$out"
-          fi
-          if [ "$GITLEAKS" = failure ]; then
-            {
-              echo "### ❌ 秘密情報らしき文字列（gitleaks）"
-              echo
-              echo "| ルール | ファイル:行 | コミット |"
-              echo "| --- | --- | --- |"
-              if [ -f results.sarif ]; then
-                jq -r '.runs[0].results[] | "| \(.ruleId) | `\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)` | \((.partialFingerprints.commitSha // "")[0:7]) |"' results.sarif | head -n 20
-              else
-                echo "| （詳細は Actions の Summary を参照） | | |"
-              fi
-              echo
-              echo "- **本物の秘密情報の場合:** すぐにその値を無効化して作り直してください。ファイルから消しても、過去のコミットに残ります。"
-              echo "- **誤検知の場合**（サンプル値・テンプレートのダミーなど）: その行を消すか、Actions の Summary にある Fingerprint をリポジトリ直下の \`.gitleaksignore\` に 1 行で追加してください。"
-              echo
-            } >> "$out"
-          fi
-          true
+        run: bash "$COSMOS_SCRIPTS/report-secrets.sh"
 
       - id: status
         if: always()
@@ -351,6 +333,7 @@ jobs:
   # ランナーの PHP と同じバージョンならそれを使い、違えば Docker の公式イメージ php:<version>-cli で実行する。
   php:
     name: PHP（構文・composer・スクリプト）
+    needs: scripts
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -362,61 +345,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: cosmos-scripts
+          path: ${{ runner.temp }}/cosmos-scripts
+
+      - name: 共通スクリプトとログの置き場所を用意する
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          { echo "LOGS=$RUNNER_TEMP/ci-logs"; echo "COSMOS_SCRIPTS=$RUNNER_TEMP/cosmos-scripts"; } >> "$GITHUB_ENV"
+
       - name: PHP のバージョンを決める
         id: setup
         env:
           DEFAULT_VERSION: ${{ inputs.php-version }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/ci-logs" "$RUNNER_TEMP/bin"
-          echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
-          if [ ! -f composer.json ] && [ -z "$(git ls-files '*.php' | head -n 1)" ]; then exit 0; fi
-          echo "found=true" >> "$GITHUB_OUTPUT"
-
-          constraint="" source="入力値 php-version"
-          if [ -f composer.json ]; then
-            constraint=$(jq -r '.config.platform.php // empty' composer.json); source="composer.json の config.platform.php"
-            if [ -z "$constraint" ]; then constraint=$(jq -r '.require.php // empty' composer.json); source="composer.json の require.php"; fi
-          fi
-          version=$(printf '%s' "$constraint" | grep -oE '[0-9]+(\.[0-9]+)?' | head -n 1 || true)
-          if [ -z "$version" ]; then version=$DEFAULT_VERSION; source="入力値 php-version"; fi
-          case "$version" in *.*) ;; *) version="$version.0" ;; esac
-          version=$(printf '%s' "$version" | cut -d. -f1-2)
-          # リポジトリの内容から決まる値なので、Docker のイメージ名に使う前に形式を確かめる
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then echo "::error::PHP のバージョンを読み取れません: $constraint"; exit 1; fi
-
-          runner_version=$(php -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')
-          composer_bin=$(readlink -f "$(command -v composer)")
-          if [ "$version" = "$runner_version" ]; then
-            mode="ランナーの PHP"
-            printf '#!/usr/bin/env bash\nexec php "$@"\n' > "$RUNNER_TEMP/bin/php-target"
-          else
-            mode="Docker の php:$version-cli"
-            docker pull --quiet "php:$version-cli" >/dev/null
-            cat > "$RUNNER_TEMP/bin/php-target" <<SH
-          #!/usr/bin/env bash
-          exec docker run --rm -i -u "\$(id -u):\$(id -g)" -e HOME=/tmp -e COMPOSER_HOME=/tmp/composer \\
-            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$composer_bin:$composer_bin:ro" -w "\$PWD" \\
-            "php:$version-cli" php "\$@"
-          SH
-          fi
-          printf '#!/usr/bin/env bash\nexec php-target %q --no-plugins "$@"\n' "$composer_bin" > "$RUNNER_TEMP/bin/composer-target"
-          chmod +x "$RUNNER_TEMP/bin/"*
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "PHP $version（$source から。実行: $mode）" | tee "$RUNNER_TEMP/ci-logs/php-version.txt"
+        run: bash "$COSMOS_SCRIPTS/php-setup.sh"
 
       - name: 構文
         id: syntax
         continue-on-error: ${{ inputs.allow-failure }}
         if: steps.setup.outputs.found == 'true'
-        run: |
-          set +e
-          # 1 つの構文エラーで止めず、すべてのファイルを調べる
-          out=$(git ls-files -z '*.php' | xargs -0 -r -n 100 bash -c 'php-target -l "$@" || exit 1' _ 2>&1)
-          status=$?
-          set -e
-          printf '%s\n' "$out" | grep -v '^No syntax errors detected' | tee "$LOGS/php-syntax.log" || true
-          exit "$status"
+        run: bash "$COSMOS_SCRIPTS/php-syntax.sh"
 
       - name: composer.json の検証
         id: validate
@@ -430,18 +379,7 @@ jobs:
         id: deps
         continue-on-error: ${{ inputs.allow-failure }}
         if: (success() || failure()) && steps.setup.outputs.found == 'true' && hashFiles(format('{0}composer.json', inputs.working-directory)) != ''
-        run: |
-          if [ -f composer.lock ]; then
-            composer install --no-interaction --no-progress --no-plugins --no-scripts --prefer-dist --ignore-platform-reqs 2>&1 | tee "$LOGS/php-deps.log"
-            echo "installed=true" >> "$GITHUB_OUTPUT"
-          elif jq -e '[(.require // {}), (."require-dev" // {}) | keys[] | select(test("^(php|ext-|lib-|composer)") | not)] | length > 0' composer.json >/dev/null; then
-            echo "composer.lock がありません" | tee "$LOGS/php-deps.log"
-            echo "::error::composer.lock がありません（composer install で作り、コミットしてください）"
-            exit 1
-          else
-            echo "依存パッケージがないため飛ばします"
-            echo "installed=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: bash "$COSMOS_SCRIPTS/php-deps.sh"
 
       - name: 既知の脆弱性（composer audit）
         id: audit
@@ -473,45 +411,7 @@ jobs:
           AUDIT: ${{ steps.audit.outcome }}
           LINT: ${{ steps.lint.outcome }}
           TEST: ${{ steps.test.outcome }}
-        run: |
-          out="$LOGS/report.md"
-          version_note="" env_note=""
-          if [ -s "$LOGS/php-version.txt" ]; then
-            version_note="（$(grep -oE 'PHP [0-9]+\.[0-9]+' "$LOGS/php-version.txt" | head -n 1)）"
-            env_note=" 実行環境: $(cat "$LOGS/php-version.txt")"
-          fi
-          section() { # $1: 見出し, $2: ログ, $3: 対応
-            {
-              echo "### ❌ $1"
-              echo
-              echo "$3"
-              echo
-              if [ -s "$2" ]; then
-                echo '<details><summary>エラーの抜粋</summary>'
-                echo
-                echo '```'
-                clean=$(sed 's/\x1b\[[0-9;]*m//g' "$2")
-                hits=$(printf '%s\n' "$clean" | grep -E -i 'error|fail|warn|critical|high|severity|advisor|cve-' || true)
-                if [ -n "$hits" ]; then printf '%s\n' "$hits" | head -n 40; else printf '%s\n' "$clean" | tail -n 20; fi
-                echo '```'
-                echo '</details>'
-                echo
-              fi
-            } >> "$out"
-          }
-          [ "$SYNTAX" = failure ] && section "PHP の構文$version_note" "$LOGS/php-syntax.log" \
-            "抜粋の \`in <ファイル> on line <行>\` の箇所に構文エラーがあります。手元では \`php -l <ファイル>\` で確認できます。バージョンが違う場合は、composer.json の \`require.php\` を確認してください。$env_note"
-          [ "$VALIDATE" = failure ] && section "composer.json の検証" "$LOGS/php-validate.log" \
-            "composer.json の書式か内容に誤りがあります。手元で \`composer validate\` を実行して直してください。"
-          [ "$DEPS" = failure ] && section "依存のインストール（composer）" "$LOGS/php-deps.log" \
-            "composer.lock がないか、composer.json と一致していません。手元で \`composer install\`（依存を変えたなら \`composer update <パッケージ>\`）を実行し、更新された composer.lock をコミットしてください。"
-          [ "$AUDIT" = failure ] && section "既知の脆弱性（composer audit）" "$LOGS/php-audit.log" \
-            "依存パッケージに公表済みの脆弱性があります。抜粋のパッケージを、修正されたバージョンに \`composer update <パッケージ>\` で上げてください。すぐに上げられない場合は、影響を確認して PR に理由を書いてください。"
-          [ "$LINT" = failure ] && section "リポジトリの lint（composer lint）$version_note" "$LOGS/php-lint.log" \
-            "composer.json の \`scripts.lint\` が失敗しました。手元で \`composer lint\` を実行して直してください。$env_note"
-          [ "$TEST" = failure ] && section "リポジトリの test（composer test）$version_note" "$LOGS/php-test.log" \
-            "composer.json の \`scripts.test\` が失敗しました。手元で \`composer test\` を実行して再現してください。CI では PHP の拡張モジュールが手元と違うことがあります。$env_note"
-          true
+        run: bash "$COSMOS_SCRIPTS/report-php.sh"
 
       - id: status
         if: always()
@@ -529,6 +429,7 @@ jobs:
   # lint や format はリポジトリが package.json の scripts で決める（TypeScript のジョブで実行される）
   gas:
     name: GAS（構文）
+    needs: scripts
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -540,21 +441,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 対象のファイルを集める
-        id: files
+      - uses: actions/download-artifact@v4
+        with:
+          name: cosmos-scripts
+          path: ${{ runner.temp }}/cosmos-scripts
+
+      - name: 共通スクリプトとログの置き場所を用意する
         run: |
           mkdir -p "$RUNNER_TEMP/ci-logs"
-          echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
-          list="$RUNNER_TEMP/gas-files.txt"
-          {
-            git ls-files '*.gs'
-            git ls-files '*appsscript.json' | while read -r manifest; do
-              dir=$(dirname "$manifest")
-              if [ "$dir" = . ]; then git ls-files '*.js'; else git ls-files "$dir/*.js"; fi
-            done
-          } | sort -u > "$list"
-          if [ -s "$list" ]; then echo "found=true" >> "$GITHUB_OUTPUT"; fi
-          echo "list=$list" >> "$GITHUB_OUTPUT"
+          { echo "LOGS=$RUNNER_TEMP/ci-logs"; echo "COSMOS_SCRIPTS=$RUNNER_TEMP/cosmos-scripts"; } >> "$GITHUB_ENV"
+
+      - name: 対象のファイルを集める
+        id: files
+        run: bash "$COSMOS_SCRIPTS/gas-files.sh"
 
       - uses: actions/setup-node@v4
         if: steps.files.outputs.found == 'true'
@@ -568,44 +467,13 @@ jobs:
         if: steps.files.outputs.found == 'true'
         env:
           LIST: ${{ steps.files.outputs.list }}
-        run: |
-          cat > "$RUNNER_TEMP/gas-syntax.cjs" <<'JS'
-          const fs = require("node:fs");
-          const vm = require("node:vm");
-          const files = fs.readFileSync(process.argv[2], "utf8").split("\n").filter(Boolean);
-          let bad = 0;
-          for (const file of files) {
-            try {
-              new vm.Script(fs.readFileSync(file, "utf8"), { filename: file });
-            } catch (e) {
-              bad++;
-              console.log(`${String(e.stack).split("\n")[0]}\n${e.name}: ${e.message}\n`);
-            }
-          }
-          console.log(`${files.length} ファイルを確認し、${bad} ファイルに構文エラーがありました`);
-          process.exit(bad ? 1 : 0);
-          JS
-          node "$RUNNER_TEMP/gas-syntax.cjs" "$LIST" 2>&1 | tee "$LOGS/gas-syntax.log"
+        run: bash "$COSMOS_SCRIPTS/gas-syntax.sh"
 
       - name: 失敗の内容をまとめる
         if: failure()
         env:
           SYNTAX: ${{ steps.syntax.outcome }}
-        run: |
-          out="$LOGS/report.md"
-          if [ "$SYNTAX" = failure ]; then
-            {
-              echo "### ❌ GAS の構文"
-              echo
-              echo "抜粋の \`<ファイル>:<行>\` の箇所に構文エラーがあります。GAS では、1 つのファイルの構文エラーでプロジェクト全体が動かなくなります。括弧や引用符の閉じ忘れ、\`import\` / \`export\`（GAS では使えません）がないか確認してください。"
-              echo
-              echo '```'
-              grep -v 'ファイルを確認し' "$LOGS/gas-syntax.log" | head -n 40 || true
-              echo '```'
-              echo
-            } >> "$out"
-          fi
-          true
+        run: bash "$COSMOS_SCRIPTS/report-gas.sh"
 
       - id: status
         if: always()
@@ -623,11 +491,21 @@ jobs:
   # 呼び出し側（team-ci.yml）に pull-requests: write がない場合や fork の PR では、コメントせずに終わる。
   report:
     name: 結果を PR にコメント
-    needs: [typescript, terraform, secrets, php, gas]
+    needs: [scripts, typescript, terraform, secrets, php, gas]
     if: always() && inputs.comment && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cosmos-scripts
+          path: ${{ runner.temp }}/cosmos-scripts
+
+      - name: 共通スクリプトとログの置き場所を用意する
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          { echo "LOGS=$RUNNER_TEMP/ci-logs"; echo "COSMOS_SCRIPTS=$RUNNER_TEMP/cosmos-scripts"; } >> "$GITHUB_ENV"
+
       - uses: actions/download-artifact@v4
         with:
           pattern: ci-report-*
@@ -643,30 +521,4 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
-        run: |
-          marker='<!-- cosmos-ci-report -->'
-          existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq ".[] | select(.user.type == \"Bot\" and (.body | startswith(\"$marker\"))) | .id" | tail -n 1)
-          body="$RUNNER_TEMP/body.md"
-          if [ "$FAILED" = true ]; then
-            {
-              echo "$marker"
-              echo "## CI が失敗しました（${SHA:0:7}）"
-              echo
-              find reports -name report.md -exec cat {} + 2>/dev/null
-              if ! find reports -name report.md 2>/dev/null | grep -q .; then
-                echo "失敗したチェックのまとめを作れませんでした（タイムアウトや取り消しなど）。[実行ログ]($RUN_URL) を確認してください。"
-                echo
-              fi
-              echo "---"
-              echo "直したら push すると、CI が再実行されてこのコメントが更新されます。直し方がわからないときは、この PR に \`@claude fix CI の失敗を直して\` とコメントすると修正 PR が作られます。 [実行ログ]($RUN_URL)"
-            } > "$body"
-          elif [ -n "$existing" ]; then
-            printf '%s\n## CI の失敗は解消しました（%s）\n\nすべてのチェックが成功しています。 [実行ログ](%s)\n' "$marker" "${SHA:0:7}" "$RUN_URL" > "$body"
-          else
-            exit 0
-          fi
-          if [ -n "$existing" ]; then
-            gh api -X PATCH "repos/$REPO/issues/comments/$existing" -F body=@"$body" >/dev/null
-          else
-            gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@"$body" >/dev/null
-          fi || echo "::warning::PR にコメントできませんでした。team-ci.yml の permissions に pull-requests: write があるか確認してください。"
+        run: bash "$COSMOS_SCRIPTS/post-comment.sh"

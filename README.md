@@ -20,6 +20,7 @@ cosmos/
 │  └─ .github/workflows/team-*.yml      下の共通 workflow を呼ぶだけの短いファイル
 ├─ sync-targets.json                    同期先のリポジトリ一覧
 ├─ tools/lint/                          sync/ と plugin の形式チェック
+├─ scripts/ci/                          共通 CI（ci.yml）が実行するスクリプト
 ├─ tests/                               設定のテスト（aws-guard・CI 失敗コメント・CI の結合テスト）
 └─ .github/
    ├─ CODEOWNERS
@@ -132,10 +133,10 @@ cosmos への PR ごとに、マージ前に次を自動で確かめます。ど
 手元で実行するとき:
 
 ```sh
-npm ci --prefix tools/lint
 tests/aws-guard/run.sh
 node tests/ci-report/run.mjs
-pip install actionlint-py shellcheck-py && actionlint .github/workflows/*.yml sync/.github/workflows/*.yml
+pip install actionlint-py shellcheck-py
+actionlint .github/workflows/*.yml sync/.github/workflows/*.yml && shellcheck -x scripts/ci/*.sh
 ```
 
 - `aws-guard.sh` の判定を変えたら、`cases.tsv` に「期待する判定 <TAB> コマンド」の行を足します。すり抜けを見つけたら、まずその行を足して失敗することを確かめてから直します。
@@ -144,16 +145,32 @@ pip install actionlint-py shellcheck-py && actionlint .github/workflows/*.yml sy
 
 ## 業務用に複製して使うとき
 
-cosmos を会社の Organization に複製（private 推奨）すると、同期されるファイルは自動でその複製を参照します。個人の cosmos には依存しません。複製先では次を行います。
+cosmos を会社の Organization に複製（private か internal）すると、同期されるファイルと共通スクリプトの取得は、自動でその複製を参照します。個人の cosmos には依存しません。
+
+### 複製した cosmos 側で行うこと
 
 1. Settings → Secrets and variables → Actions に、上の「初回セットアップ」と同じ Variables / Secrets を登録する。`CLAUDE_CODE_OAUTH_TOKEN` は Team アカウントで発行する。
 2. Team の Code Review（`@claude review`）を使う場合は、Variables に `SYNC_CLAUDE_REVIEW` = `false` を登録する。`team-claude-review.yml` が配られなくなり、同じ言葉で二重に動くのを防げます（既に配ったものは、次の同期で削除されます）。
-3. Settings → Actions → General → Access で、同じ Organization のリポジトリからの利用を許可する（private の reusable workflow を呼ぶため）。
+3. Settings → Actions → General → **Access** で、cosmos を使う範囲からの利用を許可する。既定は「Not accessible」で、このままではどこからも呼べません。
+   - 同じ Organization だけで使う: 「Accessible from repositories in the '<組織名>' organization」
+   - 同じ Enterprise の複数の Organization で使う: リポジトリを **internal** にし、「Accessible from repositories in the '<Enterprise 名>' enterprise」
 4. 次の 4 か所を書き換える。1 つ目は、書き換えるまで lint が警告します。
    - `plugins/team-dev/skills/team-init/templates/settings.json` の marketplace の `repo`
    - `.claude-plugin/marketplace.json` の `owner`
    - `.github/CODEOWNERS`
    - `sync/.claude/rules/team-*.md` の `owner`
+
+### cosmos を使う Organization ごとに行うこと
+
+例: cosmos を Organization Y に置き、Organization X と Y の両方のリポジトリで使う場合は、X と Y の両方で行います。
+
+1. GitHub App を、その Organization にもインストールする（1 つの App を複数の Organization にインストールできます）。インストール先には、cosmos 本体と、同期先のリポジトリを含めます。
+2. Organization の Settings → Secrets and variables → Actions に登録する。
+   - Variables: `SYNC_APP_ID`（App ID）
+   - Secrets: `SYNC_APP_PRIVATE_KEY`（App の秘密鍵）、`CLAUDE_CODE_OAUTH_TOKEN`（Team アカウントで発行）
+3. Enterprise と Organization の Actions のポリシーで、Enterprise 内の action / reusable workflow の利用が許可されていることを確かめる。
+
+**App が要る理由:** reusable workflow を「呼ぶ」ことは 3. の Access の設定で許可されますが、共通 CI が cosmos の `scripts/ci/` を取得するときと、同期 PR を作るときは、ファイルの読み書きが必要です。呼び出し側に自動で渡されるトークン（`GITHUB_TOKEN`）はそのリポジトリ自身しか読めないため、private / internal の cosmos は読めません。`ci.yml` は、Variables に `SYNC_APP_ID` があれば App のトークンで cosmos を取得し、なければ標準のトークンを使います（cosmos が public の個人用ではこちら）。
 
 ## 注意
 

@@ -1,6 +1,6 @@
 # 設定のテストの仕組み
 
-cosmos のテストは、jest などのテストフレームワークを使わない独自の作りです。テスト対象が bash のスクリプトと、workflow（YAML）に埋め込まれた shell であることと、全リポジトリの CI の元になる cosmos に依存パッケージを増やさないためです。使うのは bash・jq・Node.js の標準機能と、`tools/lint` にある `yaml` パッケージだけです。
+cosmos のテストは、jest などのテストフレームワークを使わない独自の作りです。テスト対象が bash のスクリプト（`scripts/ci/`、`aws-guard.sh`）であることと、全リポジトリの CI の元になる cosmos に依存パッケージを増やさないためです。使うのは bash・jq・Node.js の標準機能だけです。
 
 このページでは、それぞれのテストが「何を入力して、何と比べて、どうなったら失敗とするか」を説明します。
 
@@ -21,7 +21,7 @@ PR を作る / push する
 
 ## 1. 静的チェック（actionlint）
 
-**何を確かめるか:** workflow の書き間違い。YAML の構文、`${{ }}` の式、`needs` や `steps` の参照、`run:` に書いた shell（shellcheck）を検査します。
+**何を確かめるか:** workflow の書き間違い。YAML の構文、`${{ }}` の式、`needs` や `steps` の参照、`run:` に書いた shell を actionlint で、`scripts/ci/` のスクリプトを shellcheck で検査します。
 
 **流れ:**
 1. `pip install` で、バージョンを固定した actionlint と shellcheck を入れる。
@@ -62,7 +62,7 @@ deny	aws ssm get-parameter --name /app/token --with-decryption
 
 ## 3. 単体テスト: CI 失敗コメント（`tests/ci-report/`）
 
-**何を確かめるか:** CI が失敗したときに PR に載せるコメントの文面。`ci.yml` の各ジョブにある「失敗の内容をまとめる」ステップが、決まったログから決まった Markdown を作るか（スナップショットテスト）。
+**何を確かめるか:** CI が失敗したときに PR に載せるコメントの文面。`scripts/ci/report-*.sh` が、決まったログから決まった Markdown を作るか（スナップショットテスト）。
 
 **ファイル:**
 ```
@@ -76,9 +76,9 @@ tests/ci-report/
 ```
 
 **流れ（ケースごと）:**
-1. `run.mjs` が `.github/workflows/ci.yml` を読み、`case.json` の `job` にある「失敗の内容をまとめる」ステップの `run:` を**そのまま**取り出す。テスト用の写しは作らないので、`ci.yml` を直せばテストもその内容を使います。
+1. `run.mjs` が、`case.json` の `job` に対応するスクリプト（`scripts/ci/report-<job>.sh`）を選ぶ。CI が実行するのと**同じファイル**を実行するので、スクリプトを直せばテストもその内容を使います。
 2. 一時ディレクトリに `logs/` と `workspace/` をコピーする。
-3. `case.json` の `env`（例: `TSC=failure`）を環境変数にして、取り出したスクリプトを `bash -eo pipefail` で実行する。
+3. `case.json` の `env`（例: `TSC=failure`）を環境変数にして、スクリプトを実行する。
 4. できた `report.md` を `expected.md` と 1 文字ずつ比べる。違えば失敗し、実際の出力を表示する。
 5. `case.json` に `mustNotContain` があれば、その文字列（秘密情報の値の見本）が出力に含まれていないことも確かめる。
 
@@ -125,11 +125,11 @@ git diff tests/ci-report                # 変わった文面を確認して、PR
 ## 手元で実行する
 
 ```sh
-npm ci --prefix tools/lint                       # yaml パッケージ（ci-report が使う）
 tests/aws-guard/run.sh                           # aws-guard の判定表
 node tests/ci-report/run.mjs                     # CI 失敗コメントのスナップショット
 pip install actionlint-py shellcheck-py
 actionlint .github/workflows/*.yml sync/.github/workflows/*.yml
+shellcheck -x scripts/ci/*.sh
 ```
 
 結合テストは GitHub Actions 上でしか動きません。PR を作るか、Actions タブから `test-config` を手動で実行してください。
