@@ -3,7 +3,7 @@ name: test-config
 # cosmos の設定が意図どおりに動くかを、マージ前に確かめる。
 #   static : workflow の構文・式・埋め込みの shell を actionlint（+ shellcheck）で検査する
 #   unit   : aws-guard.sh の判定表と、CI 失敗コメントのスナップショットを確かめる
-#   e2e-*  : この PR 版の ci.yml を tests/ci-e2e/fixtures/ のサンプルに対して実行し、
+#   e2e-*  : この PR 版の ci.yml を tests/ci-e2e/fixtures/ のサンプル（TS・Terraform・秘密情報・PHP・GAS）に対して実行し、
 #            verify で各チェックの成功・失敗が期待どおりかを判定する
 on:
   pull_request:
@@ -72,9 +72,30 @@ jobs:
       comment: false
       allow-failure: true
 
+  e2e-php-syntax-error:
+    uses: ./.github/workflows/ci.yml
+    with:
+      working-directory: tests/ci-e2e/fixtures/php-syntax-error/
+      comment: false
+      allow-failure: true
+
+  e2e-php-script-fail:
+    uses: ./.github/workflows/ci.yml
+    with:
+      working-directory: tests/ci-e2e/fixtures/php-script-fail/
+      comment: false
+      allow-failure: true
+
+  e2e-gas-syntax-error:
+    uses: ./.github/workflows/ci.yml
+    with:
+      working-directory: tests/ci-e2e/fixtures/gas-syntax-error/
+      comment: false
+      allow-failure: true
+
   verify:
     name: 結合テストの判定
-    needs: [e2e-clean, e2e-ts-type-error, e2e-tf-fmt, e2e-tracked-env]
+    needs: [e2e-clean, e2e-ts-type-error, e2e-tf-fmt, e2e-tracked-env, e2e-php-syntax-error, e2e-php-script-fail, e2e-gas-syntax-error]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -82,16 +103,22 @@ jobs:
       - name: 各チェックの結果が期待どおりか
         env:
           RESULTS: |
-            clean          ${{ needs.e2e-clean.outputs.typescript }} ${{ needs.e2e-clean.outputs.terraform }} ${{ needs.e2e-clean.outputs.secrets }}
-            ts-type-error  ${{ needs.e2e-ts-type-error.outputs.typescript }} ${{ needs.e2e-ts-type-error.outputs.terraform }} ${{ needs.e2e-ts-type-error.outputs.secrets }}
-            tf-fmt         ${{ needs.e2e-tf-fmt.outputs.typescript }} ${{ needs.e2e-tf-fmt.outputs.terraform }} ${{ needs.e2e-tf-fmt.outputs.secrets }}
-            tracked-env    ${{ needs.e2e-tracked-env.outputs.typescript }} ${{ needs.e2e-tracked-env.outputs.terraform }} ${{ needs.e2e-tracked-env.outputs.secrets }}
-          # サンプル  TypeScript  Terraform  秘密情報
+            clean            ${{ needs.e2e-clean.outputs.typescript }} ${{ needs.e2e-clean.outputs.terraform }} ${{ needs.e2e-clean.outputs.secrets }} ${{ needs.e2e-clean.outputs.php }} ${{ needs.e2e-clean.outputs.gas }}
+            ts-type-error    ${{ needs.e2e-ts-type-error.outputs.typescript }} ${{ needs.e2e-ts-type-error.outputs.terraform }} ${{ needs.e2e-ts-type-error.outputs.secrets }} ${{ needs.e2e-ts-type-error.outputs.php }} ${{ needs.e2e-ts-type-error.outputs.gas }}
+            tf-fmt           ${{ needs.e2e-tf-fmt.outputs.typescript }} ${{ needs.e2e-tf-fmt.outputs.terraform }} ${{ needs.e2e-tf-fmt.outputs.secrets }} ${{ needs.e2e-tf-fmt.outputs.php }} ${{ needs.e2e-tf-fmt.outputs.gas }}
+            tracked-env      ${{ needs.e2e-tracked-env.outputs.typescript }} ${{ needs.e2e-tracked-env.outputs.terraform }} ${{ needs.e2e-tracked-env.outputs.secrets }} ${{ needs.e2e-tracked-env.outputs.php }} ${{ needs.e2e-tracked-env.outputs.gas }}
+            php-syntax-error ${{ needs.e2e-php-syntax-error.outputs.typescript }} ${{ needs.e2e-php-syntax-error.outputs.terraform }} ${{ needs.e2e-php-syntax-error.outputs.secrets }} ${{ needs.e2e-php-syntax-error.outputs.php }} ${{ needs.e2e-php-syntax-error.outputs.gas }}
+            php-script-fail  ${{ needs.e2e-php-script-fail.outputs.typescript }} ${{ needs.e2e-php-script-fail.outputs.terraform }} ${{ needs.e2e-php-script-fail.outputs.secrets }} ${{ needs.e2e-php-script-fail.outputs.php }} ${{ needs.e2e-php-script-fail.outputs.gas }}
+            gas-syntax-error ${{ needs.e2e-gas-syntax-error.outputs.typescript }} ${{ needs.e2e-gas-syntax-error.outputs.terraform }} ${{ needs.e2e-gas-syntax-error.outputs.secrets }} ${{ needs.e2e-gas-syntax-error.outputs.php }} ${{ needs.e2e-gas-syntax-error.outputs.gas }}
+          # サンプル           TypeScript Terraform 秘密情報 PHP GAS
           EXPECTED: |
-            clean          success success success
-            ts-type-error  failure success success
-            tf-fmt         success failure success
-            tracked-env    success success failure
+            clean            success success success success success
+            ts-type-error    failure success success success success
+            tf-fmt           success failure success success success
+            tracked-env      success success failure success success
+            php-syntax-error success success success failure success
+            php-script-fail  success success success failure success
+            gas-syntax-error success success success success failure
         run: |
           echo "期待:"; echo "$EXPECTED"
           echo "実際:"; echo "$RESULTS"

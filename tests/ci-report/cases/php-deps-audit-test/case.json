@@ -1,0 +1,1 @@
+{"job":"php","env":{"SYNTAX":"success","VALIDATE":"success","DEPS":"success","AUDIT":"failure","LINT":"success","TEST":"failure"}}

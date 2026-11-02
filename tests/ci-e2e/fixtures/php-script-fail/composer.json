@@ -1,0 +1,8 @@
+{
+  "require": {
+    "php": ">=8.2"
+  },
+  "scripts": {
+    "test": "php -r \"fwrite(STDERR, 'PHP ' . PHP_VERSION . ': test failed' . PHP_EOL); exit(1);\""
+  }
+}
