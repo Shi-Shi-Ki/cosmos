@@ -19,3 +19,5 @@ jobs:
       contents: read
       pull-requests: write
     uses: "{{COSMOS_REPO}}/.github/workflows/ci.yml@main"
+    # cosmos が private のとき、共通スクリプトの取得に GitHub App の秘密鍵（SYNC_APP_PRIVATE_KEY）を使う
+    secrets: inherit
