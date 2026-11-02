@@ -6,7 +6,7 @@ paths:
 owner: "@Shi-Shi-Ki"
 last-reviewed: 2026-10-31
 ---
-<!-- Shi-Shi-Ki/cosmos で管理。このリポジトリでは編集しない -->
+<!-- {{COSMOS_REPO}} で管理。このリポジトリでは編集しない -->
 # Google Apps Script
 
 - スプレッドシートの読み書きはループ内で行わず、`getValues()` / `setValues()` で一括処理する

@@ -1,0 +1,113 @@
+name: ci (reusable)
+
+# 各リポジトリの team-ci.yml から呼ばれる共通の CI。機械で確実に見つかる問題を PR ごとに検出する。
+# 該当するファイルがない項目は飛ばすので、TS / GAS / Terraform のどのリポジトリでも同じ呼び出しで使える。
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "24"
+      terraform-dir:
+        type: string
+        default: terraform
+      terraform-version:
+        type: string
+        default: "~1.9"
+
+jobs:
+  typescript:
+    name: TypeScript（型チェック・lint・format・テスト）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        if: hashFiles('pnpm-lock.yaml') != ''
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        if: hashFiles('package.json') != ''
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      # lockfile どおりにだけ入れる
+      - name: 依存を入れる
+        id: deps
+        if: hashFiles('package.json') != ''
+        run: |
+          if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; echo "x=pnpm exec" >> "$GITHUB_OUTPUT"; echo "run=pnpm" >> "$GITHUB_OUTPUT"
+          elif [ -f package-lock.json ]; then npm ci; echo "x=npx --no-install" >> "$GITHUB_OUTPUT"; echo "run=npm" >> "$GITHUB_OUTPUT"
+          else echo "::error::lockfile がありません（pnpm-lock.yaml か package-lock.json をコミットしてください）"; exit 1
+          fi
+
+      - name: 型チェック
+        if: steps.deps.outcome == 'success' && hashFiles('tsconfig.json') != ''
+        run: ${{ steps.deps.outputs.x }} tsc --noEmit
+
+      # package.json の lint スクリプトは --fix 付きのことがあるため、CI では検出だけを行う
+      - name: Lint
+        if: steps.deps.outcome == 'success' && hashFiles('eslint.config.*', '.eslintrc*') != ''
+        run: ${{ steps.deps.outputs.x }} eslint .
+
+      - name: Format
+        if: steps.deps.outcome == 'success' && hashFiles('.prettierrc*', 'prettier.config.*') != ''
+        run: ${{ steps.deps.outputs.x }} prettier --check "**/*.{ts,tsx,js,jsx,mjs,cjs}"
+
+      - name: テスト
+        if: steps.deps.outcome == 'success'
+        run: |
+          if jq -e '.scripts.test' package.json >/dev/null; then ${{ steps.deps.outputs.run }} test; else echo "test スクリプトがないため飛ばします"; fi
+
+  terraform:
+    name: Terraform（fmt・validate）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tf
+        run: |
+          if ls "${{ inputs.terraform-dir }}"/*.tf >/dev/null 2>&1; then echo "found=true" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.tf.outputs.found == 'true'
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+
+      - name: fmt
+        if: steps.tf.outputs.found == 'true'
+        working-directory: ${{ inputs.terraform-dir }}
+        run: terraform fmt -check -recursive
+
+      # backend とクラウドには接続しない（認証情報は使わない）
+      - name: validate
+        if: steps.tf.outputs.found == 'true'
+        working-directory: ${{ inputs.terraform-dir }}
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+  secrets:
+    name: 秘密情報の検出
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # state や変数ファイルには、平文の秘密情報や構成情報が入るため、コミットさせない
+      - name: tfstate / tfvars / .env がコミットされていないか
+        run: |
+          found=$(git ls-files '*.tfstate' '*.tfstate.*' '*.tfvars' '.env' '.env.*' '.clasprc.json' '*/.clasprc.json' | grep -vE '(^|/)\.env\.example$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::コミットしてはいけないファイルがあります: $found"
+            exit 1
+          fi
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

@@ -46,8 +46,20 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           path: target
 
+      # sync/ をコピーし、{{COSMOS_REPO}} をこのリポジトリ名に置き換える。
+      # cosmos を業務の Organization などに複製しても、置き換えなしでその複製を参照する
       - name: Copy managed files
-        run: cp -R standards/sync/. target/
+        env:
+          SYNC_CLAUDE_REVIEW: ${{ vars.SYNC_CLAUDE_REVIEW }}
+        run: |
+          cp -R standards/sync/. target/
+          (cd standards/sync && find . -type f) | while read -r f; do
+            sed -i "s#{{COSMOS_REPO}}#${GITHUB_REPOSITORY}#g" "target/$f"
+          done
+          # Team の Code Review（@claude review）を使う環境では、同じ言葉で二重に動かないよう配らない（既に配ったものは削除する）
+          if [ "$SYNC_CLAUDE_REVIEW" = "false" ]; then
+            rm -f target/.github/workflows/team-claude-review.yml
+          fi
 
       - uses: peter-evans/create-pull-request@v7
         with:
@@ -57,5 +69,5 @@ jobs:
           title: "chore: 共通 Claude 設定の同期"
           body: |
             ${{ github.repository }} の ${{ github.sha }} を反映します。
-            管理対象のファイル（REVIEW.md、.claude/rules/team-*.md）以外は変更しません。
+            管理対象のファイル（REVIEW.md、.claude/rules/team-*.md、.github/workflows/team-*.yml）以外は変更しません。
           labels: claude-config-sync
