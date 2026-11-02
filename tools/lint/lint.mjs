@@ -5,7 +5,9 @@ import { parse } from "yaml";
 
 const RULES_DIR = "sync/.claude/rules";
 const REVIEW_MD = "sync/REVIEW.md";
-const MANAGED_MARK = "Shi-Shi-Ki/cosmos で管理";
+// sync/ の {{COSMOS_REPO}} は、同期のときにこのリポジトリ名（owner/repo）に置き換わる
+const REPO_PLACEHOLDER = "{{COSMOS_REPO}}";
+const MANAGED_MARK = `${REPO_PLACEHOLDER} で管理`;
 const MAX_RULE_LINES = 40;
 const MAX_REVIEW_LINES = 150;
 const STALE_DAYS = 180;
@@ -65,6 +67,19 @@ if (existsSync(SYNC_WORKFLOWS_DIR)) {
     const text = readFileSync(`${SYNC_WORKFLOWS_DIR}/${file}`, "utf8");
     if (!file.startsWith("team-")) errors.push(`${file}: 同期する workflow は team- で始めてください（各リポジトリの既存の workflow を上書きしないため）`);
     if (!text.includes(MANAGED_MARK)) errors.push(`${file}: 管理対象の目印コメントがありません`);
+    if (/uses:\s*"?(?!\{\{COSMOS_REPO\}\})[\w.-]+\/[\w.-]+\/\.github\/workflows\//.test(text)) {
+      errors.push(`${file}: 共通 workflow は uses: ${REPO_PLACEHOLDER}/.github/workflows/... で参照してください`);
+    }
+  }
+}
+
+// cosmos を別の場所（業務の Organization など）に複製したときの置き換え漏れを警告する。CI では GITHUB_REPOSITORY が入る
+const here = process.env.GITHUB_REPOSITORY;
+if (here) {
+  const tpl = JSON.parse(readFileSync("plugins/team-dev/skills/team-init/templates/settings.json", "utf8"));
+  const repo = tpl.extraKnownMarketplaces?.cosmos?.source?.repo;
+  if (repo && repo.toLowerCase() !== here.toLowerCase()) {
+    warnings.push(`team-init の settings.json テンプレートの marketplace が ${repo} です。このリポジトリ（${here}）に合わせてください`);
   }
 }
 

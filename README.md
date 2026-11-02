@@ -100,7 +100,20 @@ cosmos/
 
 - 反応するのは、リポジトリのオーナー・メンバー・共同編集者のコメントだけです。
 - 本体の変更は全リポジトリに即座に効くので、PR で慎重にレビューしてください。
-- 業務の Organization で private のまま使う場合は、cosmos の Settings → Actions → General → Access で、同じ Organization のリポジトリからの利用を許可する必要があります。
+- `sync/` の中では、このリポジトリを `{{COSMOS_REPO}}` と書きます。同期のときに、このリポジトリ名（owner/repo）に置き換わります。
+
+## 業務用に複製して使うとき
+
+cosmos を会社の Organization に複製（private 推奨）すると、同期されるファイルは自動でその複製を参照します。個人の cosmos には依存しません。複製先では次を行います。
+
+1. Settings → Secrets and variables → Actions に、上の「初回セットアップ」と同じ Variables / Secrets を登録する。`CLAUDE_CODE_OAUTH_TOKEN` は Team アカウントで発行する。
+2. Team の Code Review（`@claude review`）を使う場合は、Variables に `SYNC_CLAUDE_REVIEW` = `false` を登録する。`team-claude-review.yml` が配られなくなり、同じ言葉で二重に動くのを防げます（既に配ったものは、次の同期で削除されます）。
+3. Settings → Actions → General → Access で、同じ Organization のリポジトリからの利用を許可する（private の reusable workflow を呼ぶため）。
+4. 次の 4 か所を書き換える。1 つ目は、書き換えるまで lint が警告します。
+   - `plugins/team-dev/skills/team-init/templates/settings.json` の marketplace の `repo`
+   - `.claude-plugin/marketplace.json` の `owner`
+   - `.github/CODEOWNERS`
+   - `sync/.claude/rules/team-*.md` の `owner`
 
 ## 注意
 

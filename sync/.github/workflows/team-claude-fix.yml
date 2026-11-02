@@ -1,4 +1,4 @@
-# Shi-Shi-Ki/cosmos で管理。このリポジトリでは編集しない
+# {{COSMOS_REPO}} で管理。このリポジトリでは編集しない
 # PR に「@claude fix [追加の指示]」とコメントすると、レビュー指摘を直した修正 PR を元の PR のブランチに向けて作る。
 name: team-claude-fix
 
@@ -21,5 +21,5 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-    uses: Shi-Shi-Ki/cosmos/.github/workflows/claude-fix.yml@main
+    uses: "{{COSMOS_REPO}}/.github/workflows/claude-fix.yml@main"
     secrets: inherit
