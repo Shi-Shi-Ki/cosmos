@@ -93,7 +93,9 @@ jobs:
                 echo '<details><summary>エラーの抜粋</summary>'
                 echo
                 echo '```'
-                sed 's/\x1b\[[0-9;]*m//g' "$2" | grep -E -i 'error|fail|warn|✕|●|\[warn\]' | head -n 40 || true
+                clean=$(sed 's/\x1b\[[0-9;]*m//g' "$2")
+                # エラーらしい行だけを出す。見つからなければ末尾を出す
+                printf '%s\n' "$clean" | grep -E -i 'error|fail|warn|✕|●|\[warn\]' | head -n 40 || printf '%s\n' "$clean" | tail -n 20
                 echo '```'
                 echo '</details>'
                 echo
