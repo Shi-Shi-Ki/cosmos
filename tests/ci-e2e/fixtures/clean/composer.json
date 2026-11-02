@@ -1,0 +1,9 @@
+{
+  "require": {
+    "php": "^8.3"
+  },
+  "scripts": {
+    "lint": "php -r \"echo 'lint ok';\"",
+    "test": "php -r \"echo 'test ok';\""
+  }
+}

@@ -100,6 +100,17 @@ cosmos/
 | `@claude review terraform/ だけ` | 後ろの文で範囲・観点を絞る |
 | `@claude fix [追加の指示]` | 指摘を直した修正 PR を、元の PR のブランチに向けて作る |
 
+- CI（`team-ci.yml`）が調べるのは、フレームワークやツールに依存しない最低限のことだけです。何を使って lint・テストするかは、各リポジトリが `package.json` / `composer.json` の `scripts` で決めます（cosmos はツールを知らなくてよい）。
+
+  | 対象 | cosmos が調べること |
+  | --- | --- |
+  | TypeScript / JavaScript | lockfile どおりのインストール、`tsc --noEmit`、ESLint / Prettier（設定があれば）、`test` スクリプト |
+  | PHP | `php -l` で全ファイルの構文、`composer validate`、`composer.lock` どおりのインストール（プラグイン・スクリプトは実行しない）、`composer audit`、`composer.json` の `scripts.lint` / `scripts.test` |
+  | GAS | `.gs` と、`appsscript.json` のあるディレクトリの `.js` の構文 |
+  | Terraform | `fmt -check`、`validate`（backend なし） |
+  | 共通 | tfstate・tfvars・`.env` のコミット、gitleaks |
+
+  PHP のバージョンは `composer.json` の `config.platform.php` → `require.php` の下限（`^8.2` なら 8.2）→ 呼び出し側の入力 `php-version`（既定 8.3）の順に決めます。ランナーの PHP と違うバージョンは、Docker の公式イメージ `php:<version>-cli` で実行します。このイメージには拡張モジュールが最小限しか入っていないため、拡張が必要なテストは、ランナーと同じバージョンを使うか、テストのスクリプト側で対応してください。
 - CI（`team-ci.yml`）が失敗すると、失敗したチェック・エラーの抜粋・対応方法を PR に 1 つのコメントで載せます。push し直して成功すると、同じコメントが「解消しました」に変わります。秘密情報は値を載せず、ルール・ファイル・行だけを載せます。
 - 反応するのは、リポジトリのオーナー・メンバー・共同編集者のコメントだけです。
 - 本体の変更は全リポジトリに即座に効くので、PR で慎重にレビューしてください。
@@ -114,7 +125,7 @@ cosmos への PR ごとに、マージ前に次を自動で確かめます。ど
 | 静的チェック | workflow の構文・式・埋め込みの shell を actionlint と shellcheck で検査 | `.github/workflows/`, `sync/.github/workflows/` |
 | 単体テスト | `aws-guard.sh` が各コマンドを許可・確認・拒否のどれにするか | `tests/aws-guard/cases.tsv` |
 | 単体テスト | CI 失敗コメントの文面（秘密情報の値を載せないことも確認） | `tests/ci-report/cases/` |
-| 結合テスト | PR 版の `ci.yml` をわざと壊したサンプルに対して実行し、成功・失敗が期待どおりか | `tests/ci-e2e/fixtures/` |
+| 結合テスト | PR 版の `ci.yml` をわざと壊したサンプル（TS・Terraform・秘密情報・PHP・GAS）に対して実行し、成功・失敗が期待どおりか | `tests/ci-e2e/fixtures/` |
 
 手元で実行するとき:
 

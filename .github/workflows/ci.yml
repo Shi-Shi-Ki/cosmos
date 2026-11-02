@@ -1,7 +1,8 @@
 name: ci (reusable)
 
 # 各リポジトリの team-ci.yml から呼ばれる共通の CI。機械で確実に見つかる問題を PR ごとに検出する。
-# 該当するファイルがない項目は飛ばすので、TS / GAS / Terraform のどのリポジトリでも同じ呼び出しで使える。
+# 該当するファイルがない項目は飛ばすので、TS / GAS / PHP / Terraform のどのリポジトリでも同じ呼び出しで使える。
+# フレームワークやツールの選択はリポジトリに任せ、ここでは構文・依存・秘密情報と、リポジトリが scripts に書いた lint / test だけを扱う。
 # 失敗したときは、どのチェックがなぜ落ちたかと対応方法を PR にコメントする（Actions のログを開かなくてよいように）。
 on:
   workflow_call:
@@ -15,6 +16,10 @@ on:
       terraform-version:
         type: string
         default: "~1.9"
+      # composer.json に PHP のバージョンが書かれていないときに使う
+      php-version:
+        type: string
+        default: "8.3"
       # 調べる対象のディレクトリ（末尾に / を付ける）。cosmos の結合テストでサンプルを指すときだけ使う
       working-directory:
         type: string
@@ -35,6 +40,10 @@ on:
         value: ${{ jobs.terraform.outputs.result }}
       secrets:
         value: ${{ jobs.secrets.outputs.result }}
+      php:
+        value: ${{ jobs.php.outputs.result }}
+      gas:
+        value: ${{ jobs.gas.outputs.result }}
 
 jobs:
   typescript:
@@ -335,11 +344,286 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
+  # PHP: フレームワークやツールには依存せず、どのリポジトリでも同じ意味を持つことだけを調べる。
+  #   構文（php -l）、composer.json の妥当性、lockfile どおりの依存、既知の脆弱性（composer audit）、
+  #   リポジトリが composer.json の scripts に書いた lint / test。
+  # PHP のバージョンは composer.json の config.platform.php → require.php の下限 → 入力値 php-version の順に決める。
+  # ランナーの PHP と同じバージョンならそれを使い、違えば Docker の公式イメージ php:<version>-cli で実行する。
+  php:
+    name: PHP（構文・composer・スクリプト）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      result: ${{ steps.status.outputs.result }}
+    defaults:
+      run:
+        shell: bash -eo pipefail {0}
+        working-directory: ${{ inputs.working-directory || '.' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP のバージョンを決める
+        id: setup
+        env:
+          DEFAULT_VERSION: ${{ inputs.php-version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs" "$RUNNER_TEMP/bin"
+          echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
+          if [ ! -f composer.json ] && [ -z "$(git ls-files '*.php' | head -n 1)" ]; then exit 0; fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+          constraint="" source="入力値 php-version"
+          if [ -f composer.json ]; then
+            constraint=$(jq -r '.config.platform.php // empty' composer.json); source="composer.json の config.platform.php"
+            if [ -z "$constraint" ]; then constraint=$(jq -r '.require.php // empty' composer.json); source="composer.json の require.php"; fi
+          fi
+          version=$(printf '%s' "$constraint" | grep -oE '[0-9]+(\.[0-9]+)?' | head -n 1 || true)
+          if [ -z "$version" ]; then version=$DEFAULT_VERSION; source="入力値 php-version"; fi
+          case "$version" in *.*) ;; *) version="$version.0" ;; esac
+          version=$(printf '%s' "$version" | cut -d. -f1-2)
+          # リポジトリの内容から決まる値なので、Docker のイメージ名に使う前に形式を確かめる
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then echo "::error::PHP のバージョンを読み取れません: $constraint"; exit 1; fi
+
+          runner_version=$(php -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')
+          composer_bin=$(readlink -f "$(command -v composer)")
+          if [ "$version" = "$runner_version" ]; then
+            mode="ランナーの PHP"
+            printf '#!/usr/bin/env bash\nexec php "$@"\n' > "$RUNNER_TEMP/bin/php-target"
+          else
+            mode="Docker の php:$version-cli"
+            docker pull --quiet "php:$version-cli" >/dev/null
+            cat > "$RUNNER_TEMP/bin/php-target" <<SH
+          #!/usr/bin/env bash
+          exec docker run --rm -i -u "\$(id -u):\$(id -g)" -e HOME=/tmp -e COMPOSER_HOME=/tmp/composer \\
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$composer_bin:$composer_bin:ro" -w "\$PWD" \\
+            "php:$version-cli" php "\$@"
+          SH
+          fi
+          printf '#!/usr/bin/env bash\nexec php-target %q --no-plugins "$@"\n' "$composer_bin" > "$RUNNER_TEMP/bin/composer-target"
+          chmod +x "$RUNNER_TEMP/bin/"*
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "PHP $version（$source から。実行: $mode）" | tee "$RUNNER_TEMP/ci-logs/php-version.txt"
+
+      - name: 構文
+        id: syntax
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: steps.setup.outputs.found == 'true'
+        run: |
+          set +e
+          # 1 つの構文エラーで止めず、すべてのファイルを調べる
+          out=$(git ls-files -z '*.php' | xargs -0 -r -n 100 bash -c 'php-target -l "$@" || exit 1' _ 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$out" | grep -v '^No syntax errors detected' | tee "$LOGS/php-syntax.log" || true
+          exit "$status"
+
+      - name: composer.json の検証
+        id: validate
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: (success() || failure()) && steps.setup.outputs.found == 'true' && hashFiles(format('{0}composer.json', inputs.working-directory)) != ''
+        run: composer validate --no-check-publish --no-check-lock --no-interaction 2>&1 | tee "$LOGS/php-validate.log"
+
+      # 依存は lockfile どおりにだけ入れる。プラグインとインストール時のスクリプトは実行しない（サプライチェーン対策）。
+      # 拡張モジュールの有無はリポジトリの事情なので、インストール時には確かめない
+      - name: 依存を入れる
+        id: deps
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: (success() || failure()) && steps.setup.outputs.found == 'true' && hashFiles(format('{0}composer.json', inputs.working-directory)) != ''
+        run: |
+          if [ -f composer.lock ]; then
+            composer install --no-interaction --no-progress --no-plugins --no-scripts --prefer-dist --ignore-platform-reqs 2>&1 | tee "$LOGS/php-deps.log"
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+          elif jq -e '[(.require // {}), (."require-dev" // {}) | keys[] | select(test("^(php|ext-|lib-|composer)") | not)] | length > 0' composer.json >/dev/null; then
+            echo "composer.lock がありません" | tee "$LOGS/php-deps.log"
+            echo "::error::composer.lock がありません（composer install で作り、コミットしてください）"
+            exit 1
+          else
+            echo "依存パッケージがないため飛ばします"
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 既知の脆弱性（composer audit）
+        id: audit
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: (success() || failure()) && steps.deps.outputs.installed == 'true' && hashFiles(format('{0}composer.lock', inputs.working-directory)) != ''
+        run: composer audit --locked --no-interaction --abandoned=ignore 2>&1 | tee "$LOGS/php-audit.log"
+
+      # 何を使って lint / test するかはリポジトリが composer.json の scripts で決める
+      - name: リポジトリの lint
+        id: lint
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: (success() || failure()) && steps.deps.outputs.installed == 'true'
+        run: |
+          if jq -e '.scripts.lint' composer.json >/dev/null; then composer-target run-script lint --no-interaction 2>&1 | tee "$LOGS/php-lint.log"; else echo "composer.json に lint スクリプトがないため飛ばします"; fi
+
+      - name: リポジトリの test
+        id: test
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: (success() || failure()) && steps.deps.outputs.installed == 'true'
+        run: |
+          if jq -e '.scripts.test' composer.json >/dev/null; then composer-target run-script test --no-interaction 2>&1 | tee "$LOGS/php-test.log"; else echo "composer.json に test スクリプトがないため飛ばします"; fi
+
+      - name: 失敗の内容をまとめる
+        if: failure()
+        env:
+          SYNTAX: ${{ steps.syntax.outcome }}
+          VALIDATE: ${{ steps.validate.outcome }}
+          DEPS: ${{ steps.deps.outcome }}
+          AUDIT: ${{ steps.audit.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          TEST: ${{ steps.test.outcome }}
+        run: |
+          out="$LOGS/report.md"
+          version_note="" env_note=""
+          if [ -s "$LOGS/php-version.txt" ]; then
+            version_note="（$(grep -oE 'PHP [0-9]+\.[0-9]+' "$LOGS/php-version.txt" | head -n 1)）"
+            env_note=" 実行環境: $(cat "$LOGS/php-version.txt")"
+          fi
+          section() { # $1: 見出し, $2: ログ, $3: 対応
+            {
+              echo "### ❌ $1"
+              echo
+              echo "$3"
+              echo
+              if [ -s "$2" ]; then
+                echo '<details><summary>エラーの抜粋</summary>'
+                echo
+                echo '```'
+                clean=$(sed 's/\x1b\[[0-9;]*m//g' "$2")
+                hits=$(printf '%s\n' "$clean" | grep -E -i 'error|fail|warn|critical|high|severity|advisor|cve-' || true)
+                if [ -n "$hits" ]; then printf '%s\n' "$hits" | head -n 40; else printf '%s\n' "$clean" | tail -n 20; fi
+                echo '```'
+                echo '</details>'
+                echo
+              fi
+            } >> "$out"
+          }
+          [ "$SYNTAX" = failure ] && section "PHP の構文$version_note" "$LOGS/php-syntax.log" \
+            "抜粋の \`in <ファイル> on line <行>\` の箇所に構文エラーがあります。手元では \`php -l <ファイル>\` で確認できます。バージョンが違う場合は、composer.json の \`require.php\` を確認してください。$env_note"
+          [ "$VALIDATE" = failure ] && section "composer.json の検証" "$LOGS/php-validate.log" \
+            "composer.json の書式か内容に誤りがあります。手元で \`composer validate\` を実行して直してください。"
+          [ "$DEPS" = failure ] && section "依存のインストール（composer）" "$LOGS/php-deps.log" \
+            "composer.lock がないか、composer.json と一致していません。手元で \`composer install\`（依存を変えたなら \`composer update <パッケージ>\`）を実行し、更新された composer.lock をコミットしてください。"
+          [ "$AUDIT" = failure ] && section "既知の脆弱性（composer audit）" "$LOGS/php-audit.log" \
+            "依存パッケージに公表済みの脆弱性があります。抜粋のパッケージを、修正されたバージョンに \`composer update <パッケージ>\` で上げてください。すぐに上げられない場合は、影響を確認して PR に理由を書いてください。"
+          [ "$LINT" = failure ] && section "リポジトリの lint（composer lint）$version_note" "$LOGS/php-lint.log" \
+            "composer.json の \`scripts.lint\` が失敗しました。手元で \`composer lint\` を実行して直してください。$env_note"
+          [ "$TEST" = failure ] && section "リポジトリの test（composer test）$version_note" "$LOGS/php-test.log" \
+            "composer.json の \`scripts.test\` が失敗しました。手元で \`composer test\` を実行して再現してください。CI では PHP の拡張モジュールが手元と違うことがあります。$env_note"
+          true
+
+      - id: status
+        if: always()
+        run: echo "result=${{ (job.status == 'failure' || contains(steps.*.outcome, 'failure')) && 'failure' || 'success' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ci-report-php
+          path: ${{ runner.temp }}/ci-logs/report.md
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # GAS: .gs と、appsscript.json のあるディレクトリの .js を、JavaScript（スクリプト）として構文だけ調べる。
+  # lint や format はリポジトリが package.json の scripts で決める（TypeScript のジョブで実行される）
+  gas:
+    name: GAS（構文）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      result: ${{ steps.status.outputs.result }}
+    defaults:
+      run:
+        shell: bash -eo pipefail {0}
+        working-directory: ${{ inputs.working-directory || '.' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 対象のファイルを集める
+        id: files
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
+          list="$RUNNER_TEMP/gas-files.txt"
+          {
+            git ls-files '*.gs'
+            git ls-files '*appsscript.json' | while read -r manifest; do
+              dir=$(dirname "$manifest")
+              if [ "$dir" = . ]; then git ls-files '*.js'; else git ls-files "$dir/*.js"; fi
+            done
+          } | sort -u > "$list"
+          if [ -s "$list" ]; then echo "found=true" >> "$GITHUB_OUTPUT"; fi
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.files.outputs.found == 'true'
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      # GAS は ES モジュールではなくスクリプトとして読み込まれるので、vm.Script で構文だけを確かめる（依存なし）
+      - name: 構文
+        id: syntax
+        continue-on-error: ${{ inputs.allow-failure }}
+        if: steps.files.outputs.found == 'true'
+        env:
+          LIST: ${{ steps.files.outputs.list }}
+        run: |
+          cat > "$RUNNER_TEMP/gas-syntax.cjs" <<'JS'
+          const fs = require("node:fs");
+          const vm = require("node:vm");
+          const files = fs.readFileSync(process.argv[2], "utf8").split("\n").filter(Boolean);
+          let bad = 0;
+          for (const file of files) {
+            try {
+              new vm.Script(fs.readFileSync(file, "utf8"), { filename: file });
+            } catch (e) {
+              bad++;
+              console.log(`${String(e.stack).split("\n")[0]}\n${e.name}: ${e.message}\n`);
+            }
+          }
+          console.log(`${files.length} ファイルを確認し、${bad} ファイルに構文エラーがありました`);
+          process.exit(bad ? 1 : 0);
+          JS
+          node "$RUNNER_TEMP/gas-syntax.cjs" "$LIST" 2>&1 | tee "$LOGS/gas-syntax.log"
+
+      - name: 失敗の内容をまとめる
+        if: failure()
+        env:
+          SYNTAX: ${{ steps.syntax.outcome }}
+        run: |
+          out="$LOGS/report.md"
+          if [ "$SYNTAX" = failure ]; then
+            {
+              echo "### ❌ GAS の構文"
+              echo
+              echo "抜粋の \`<ファイル>:<行>\` の箇所に構文エラーがあります。GAS では、1 つのファイルの構文エラーでプロジェクト全体が動かなくなります。括弧や引用符の閉じ忘れ、\`import\` / \`export\`（GAS では使えません）がないか確認してください。"
+              echo
+              echo '```'
+              grep -v 'ファイルを確認し' "$LOGS/gas-syntax.log" | head -n 40 || true
+              echo '```'
+              echo
+            } >> "$out"
+          fi
+          true
+
+      - id: status
+        if: always()
+        run: echo "result=${{ (job.status == 'failure' || contains(steps.*.outcome, 'failure')) && 'failure' || 'success' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ci-report-gas
+          path: ${{ runner.temp }}/ci-logs/report.md
+          if-no-files-found: ignore
+          retention-days: 3
+
   # 失敗のまとめを 1 つのコメントにして PR に載せる。次の実行で成功したら、同じコメントを「解消」に書き換える。
   # 呼び出し側（team-ci.yml）に pull-requests: write がない場合や fork の PR では、コメントせずに終わる。
   report:
     name: 結果を PR にコメント
-    needs: [typescript, terraform, secrets]
+    needs: [typescript, terraform, secrets, php, gas]
     if: always() && inputs.comment && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5

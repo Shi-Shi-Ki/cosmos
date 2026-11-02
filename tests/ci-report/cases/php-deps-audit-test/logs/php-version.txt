@@ -1,0 +1,1 @@
+PHP 8.3（composer.json の require.php から。実行: ランナーの PHP）

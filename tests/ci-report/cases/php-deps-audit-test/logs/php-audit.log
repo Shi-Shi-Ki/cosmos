@@ -1,0 +1,8 @@
+Found 1 security vulnerability advisory affecting 1 package:
++-------------------+----------------------------------------------------------------------------------+
+| Package           | guzzlehttp/psr7                                                                  |
+| Severity          | high                                                                             |
+| CVE               | CVE-2023-29197                                                                   |
+| Title             | Improper header validation                                                       |
+| Affected versions | >=2,<2.4.5                                                                       |
++-------------------+----------------------------------------------------------------------------------+

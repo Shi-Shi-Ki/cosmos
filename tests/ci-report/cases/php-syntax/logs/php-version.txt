@@ -1,0 +1,1 @@
+PHP 8.2（composer.json の require.php から。実行: Docker の php:8.2-cli）

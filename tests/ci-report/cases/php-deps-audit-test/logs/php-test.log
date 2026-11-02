@@ -1,0 +1,13 @@
+> phpunit
+PHPUnit 11.5.0 by Sebastian Bergmann and contributors.
+
+F.                                                                  2 / 2 (100%)
+
+There was 1 failure:
+
+1) Tests\GreetTest::testGreet
+Failed asserting that two strings are identical.
+
+FAILURES!
+Tests: 2, Assertions: 2, Failures: 1.
+Script phpunit handling the test event returned with error code 1
