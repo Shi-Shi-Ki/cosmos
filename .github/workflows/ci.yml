@@ -77,7 +77,7 @@ jobs:
         id: tsc
         continue-on-error: ${{ inputs.allow-failure }}
         if: steps.deps.outcome == 'success' && hashFiles(format('{0}tsconfig.json', inputs.working-directory)) != ''
-        run: ${{ steps.deps.outputs.x }} tsc --noEmit 2>&1 | tee "$LOGS/tsc.log" || true
+        run: ${{ steps.deps.outputs.x }} tsc --noEmit 2>&1 | tee "$LOGS/tsc.log"
 
       # package.json の lint スクリプトは --fix 付きのことがあるため、CI では検出だけを行う
       - name: Lint
