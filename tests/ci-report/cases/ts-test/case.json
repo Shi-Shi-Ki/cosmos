@@ -1,0 +1,1 @@
+{"job":"typescript","env":{"RUN":"pnpm","X":"pnpm exec","DEPS":"success","TSC":"success","TEST":"failure"}}

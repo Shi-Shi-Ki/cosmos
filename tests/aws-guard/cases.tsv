@@ -1,0 +1,50 @@
+# 期待する判定	コマンド
+# allow = 何も返さない（通常の許可設定に任せる） / ask = 承認を求める / deny = 拒否
+# --- 参照系は通す
+allow	aws s3 ls
+allow	aws s3 ls s3://my-bucket/path/
+allow	aws ec2 describe-instances --region ap-northeast-1
+allow	aws --profile dev --region ap-northeast-1 ec2 describe-instances
+allow	aws --profile=dev sts get-caller-identity
+allow	aws ssm get-parameter --name /app/endpoint
+allow	aws logs tail /aws/lambda/fn --follow
+allow	aws lambda list-functions --output json --query 'Functions[].FunctionName'
+allow	aws dynamodb batch-get-item --request-items file://req.json
+allow	aws --version
+allow	aws help
+allow	aws configure list
+allow	AWS_PROFILE=dev aws ec2 describe-vpcs
+allow	/usr/local/bin/aws s3 ls
+# --- aws を引数として含むだけのものは対象外
+allow	grep -r aws src/
+allow	echo "use aws ec2 terminate-instances carefully"
+allow	git commit -m 'aws: add s3 bucket'
+allow	cat docs/aws.md
+# --- 変更系は承認を求める
+ask	aws ec2 terminate-instances --instance-ids i-123
+ask	aws s3 rm s3://my-bucket/file
+ask	aws s3 cp ./a s3://my-bucket/a
+ask	aws s3api put-bucket-policy --bucket b --policy file://p.json
+ask	aws ssm put-parameter --name /a --value b
+ask	aws --profile prod lambda delete-function --function-name f
+ask	aws iam create-access-key --user-name u
+ask	aws cloudformation deploy --template-file t.yml --stack-name s
+ask	aws ecs update-service --cluster c --service s --force-new-deployment
+# --- 秘密情報・認証情報を返す参照系も承認を求める
+ask	aws secretsmanager get-secret-value --secret-id prod/db
+ask	aws ecr get-login-password --region ap-northeast-1
+ask	aws sts get-session-token
+# --- すり抜けの形
+ask	bash -c "aws ec2 terminate-instances --instance-ids i-1"
+ask	sh -c 'aws s3 rm s3://b/k'
+ask	cd infra && aws s3 rm s3://b/k
+ask	aws s3 ls; aws s3 rm s3://b/k
+ask	echo ok | xargs aws s3 rm
+ask	sudo aws iam delete-user --user-name u
+ask	env AWS_PROFILE=prod aws ec2 stop-instances --instance-ids i-1
+ask	timeout 30 aws ec2 reboot-instances --instance-ids i-1
+ask	$(aws ec2 terminate-instances --instance-ids i-1)
+# --- SecureString の復号は拒否
+deny	aws ssm get-parameter --name /app/token --with-decryption
+deny	aws ssm get-parameters --names a b --with-decryption --profile prod
+deny	bash -c "aws ssm get-parameters-by-path --path /app --with-decryption"

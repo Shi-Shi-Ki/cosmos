@@ -1,0 +1,7 @@
+{
+  "name": "fixture-ts-type-error",
+  "private": true,
+  "devDependencies": {
+    "typescript": "~5.9.0"
+  }
+}

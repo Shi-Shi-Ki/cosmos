@@ -1,0 +1,9 @@
+> jest
+
+PASS src/app.service.spec.ts
+FAIL src/app.controller.spec.ts
+  ● AppController › root › should return "Hello World!"
+
+    expect(received).toBe(expected) // Object.is equality
+
+Tests:       1 failed, 3 passed, 4 total
