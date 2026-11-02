@@ -1,0 +1,56 @@
+name: probe-self-ref (reusable)
+
+# 検証用（マージしない）: reusable workflow が「自分が呼ばれたリポジトリとコミット」を知れるかを調べる。
+on:
+  workflow_call:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: 候補の値を出す
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          GH_JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+          GH_WORKFLOW_REF: ${{ github.workflow_ref }}
+          GH_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_SHA: ${{ github.sha }}
+        run: |
+          echo "github.repository      = $GH_REPOSITORY"
+          echo "github.sha             = $GH_SHA"
+          echo "github.workflow_ref    = $GH_WORKFLOW_REF"
+          echo "github.workflow_sha    = $GH_WORKFLOW_SHA"
+          echo "github.job_workflow_sha= $GH_JOB_WORKFLOW_SHA"
+          echo "job context:"; echo "$JOB_CONTEXT" | jq 'del(.services, .container)'
+
+      # OIDC トークンのクレーム（トークン自体は出さない）
+      - name: OIDC のクレームを出す
+        run: |
+          token=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=probe" | jq -r .value)
+          payload=$(printf '%s' "$token" | cut -d. -f2 | tr '_-' '/+')
+          while [ $(( ${#payload} % 4 )) -ne 0 ]; do payload="$payload="; done
+          printf '%s' "$payload" | base64 -d | jq '{repository, sha, ref, workflow_ref, workflow_sha, job_workflow_ref, job_workflow_sha}'
+          printf '%s' "$payload" | base64 -d | jq -r '"OIDC_JOB_WORKFLOW_REF=\(.job_workflow_ref)\nOIDC_JOB_WORKFLOW_SHA=\(.job_workflow_sha)"' >> "$GITHUB_ENV"
+
+      - name: 呼ばれた cosmos を 2 回目の checkout で取得する
+        run: |
+          repo=${OIDC_JOB_WORKFLOW_REF%%/.github/workflows/*}
+          echo "repo=$repo sha=$OIDC_JOB_WORKFLOW_SHA"
+          echo "repo=$repo" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.repo }}
+          ref: ${{ env.OIDC_JOB_WORKFLOW_SHA }}
+          path: .cosmos
+          persist-credentials: false
+
+      - name: 取得できたかを確かめる
+        run: |
+          git -C .cosmos log -1 --format='取得したコミット: %H %s'
+          test -f .cosmos/.github/workflows/probe-self-ref.yml && echo "probe-self-ref.yml があります（呼ばれた側のコミットを取得できた）"
