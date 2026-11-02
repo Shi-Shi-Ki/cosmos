@@ -108,6 +108,8 @@ jobs:
             exit 1
           fi
 
+      # 結果はジョブのサマリーに出す。PR へのコメントは pull-requests: write が要るので使わない
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
