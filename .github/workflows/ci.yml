@@ -2,6 +2,7 @@ name: ci (reusable)
 
 # 各リポジトリの team-ci.yml から呼ばれる共通の CI。機械で確実に見つかる問題を PR ごとに検出する。
 # 該当するファイルがない項目は飛ばすので、TS / GAS / Terraform のどのリポジトリでも同じ呼び出しで使える。
+# 失敗したときは、どのチェックがなぜ落ちたかと対応方法を PR にコメントする（Actions のログを開かなくてよいように）。
 on:
   workflow_call:
     inputs:
@@ -20,8 +21,13 @@ jobs:
     name: TypeScript（型チェック・lint・format・テスト）
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash -eo pipefail {0}
     steps:
       - uses: actions/checkout@v4
+
+      - run: mkdir -p "$RUNNER_TEMP/ci-logs" && echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
 
       - uses: pnpm/action-setup@v4
         if: hashFiles('pnpm-lock.yaml') != ''
@@ -38,57 +44,165 @@ jobs:
         id: deps
         if: hashFiles('package.json') != ''
         run: |
-          if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; echo "x=pnpm exec" >> "$GITHUB_OUTPUT"; echo "run=pnpm" >> "$GITHUB_OUTPUT"
-          elif [ -f package-lock.json ]; then npm ci; echo "x=npx --no-install" >> "$GITHUB_OUTPUT"; echo "run=npm" >> "$GITHUB_OUTPUT"
-          else echo "::error::lockfile がありません（pnpm-lock.yaml か package-lock.json をコミットしてください）"; exit 1
+          if [ -f pnpm-lock.yaml ]; then echo "x=pnpm exec" >> "$GITHUB_OUTPUT"; echo "run=pnpm" >> "$GITHUB_OUTPUT"; pnpm install --frozen-lockfile 2>&1 | tee "$LOGS/deps.log"
+          elif [ -f package-lock.json ]; then echo "x=npx --no-install" >> "$GITHUB_OUTPUT"; echo "run=npm" >> "$GITHUB_OUTPUT"; npm ci 2>&1 | tee "$LOGS/deps.log"
+          else echo "lockfile がありません" | tee "$LOGS/deps.log"; echo "::error::lockfile がありません（pnpm-lock.yaml か package-lock.json をコミットしてください）"; exit 1
           fi
 
       - name: 型チェック
+        id: tsc
         if: steps.deps.outcome == 'success' && hashFiles('tsconfig.json') != ''
-        run: ${{ steps.deps.outputs.x }} tsc --noEmit
+        run: ${{ steps.deps.outputs.x }} tsc --noEmit 2>&1 | tee "$LOGS/tsc.log"
 
       # package.json の lint スクリプトは --fix 付きのことがあるため、CI では検出だけを行う
       - name: Lint
-        if: steps.deps.outcome == 'success' && hashFiles('eslint.config.*', '.eslintrc*') != ''
-        run: ${{ steps.deps.outputs.x }} eslint .
+        id: eslint
+        if: (success() || failure()) && steps.deps.outcome == 'success' && hashFiles('eslint.config.*', '.eslintrc*') != ''
+        run: ${{ steps.deps.outputs.x }} eslint . 2>&1 | tee "$LOGS/eslint.log"
 
       - name: Format
-        if: steps.deps.outcome == 'success' && hashFiles('.prettierrc*', 'prettier.config.*') != ''
-        run: ${{ steps.deps.outputs.x }} prettier --check "**/*.{ts,tsx,js,jsx,mjs,cjs}"
+        id: prettier
+        if: (success() || failure()) && steps.deps.outcome == 'success' && hashFiles('.prettierrc*', 'prettier.config.*') != ''
+        run: ${{ steps.deps.outputs.x }} prettier --check "**/*.{ts,tsx,js,jsx,mjs,cjs}" 2>&1 | tee "$LOGS/prettier.log"
 
       - name: テスト
-        if: steps.deps.outcome == 'success'
+        id: test
+        if: (success() || failure()) && steps.deps.outcome == 'success'
         run: |
-          if jq -e '.scripts.test' package.json >/dev/null; then ${{ steps.deps.outputs.run }} test; else echo "test スクリプトがないため飛ばします"; fi
+          if jq -e '.scripts.test' package.json >/dev/null; then ${{ steps.deps.outputs.run }} test 2>&1 | tee "$LOGS/test.log"; else echo "test スクリプトがないため飛ばします"; fi
+
+      - name: 失敗の内容をまとめる
+        if: failure()
+        env:
+          RUN: ${{ steps.deps.outputs.run || 'pnpm' }}
+          X: ${{ steps.deps.outputs.x || 'pnpm exec' }}
+          DEPS: ${{ steps.deps.outcome }}
+          TSC: ${{ steps.tsc.outcome }}
+          ESLINT: ${{ steps.eslint.outcome }}
+          PRETTIER: ${{ steps.prettier.outcome }}
+          TEST: ${{ steps.test.outcome }}
+        run: |
+          out="$LOGS/report.md"
+          section() { # $1: 見出し, $2: ログ, $3: 対応
+            {
+              echo "### ❌ $1"
+              echo
+              echo "$3"
+              echo
+              if [ -s "$2" ]; then
+                echo '<details><summary>エラーの抜粋</summary>'
+                echo
+                echo '```'
+                clean=$(sed 's/\x1b\[[0-9;]*m//g' "$2")
+                # エラーらしい行だけを出す。見つからなければ末尾を出す
+                hits=$(printf '%s\n' "$clean" | grep -E -i 'error|fail|warn|✕|●|\[warn\]' || true)
+                if [ -n "$hits" ]; then printf '%s\n' "$hits" | head -n 40; else printf '%s\n' "$clean" | tail -n 20; fi
+                echo '```'
+                echo '</details>'
+                echo
+              fi
+            } >> "$out"
+          }
+          [ "$DEPS" = failure ] && section "依存のインストール" "$LOGS/deps.log" \
+            "lockfile と package.json が一致していないか、lockfile がありません。手元で \`$RUN install\` を実行し、更新された lockfile をコミットしてください。"
+          [ "$TSC" = failure ] && section "型チェック（tsc）" "$LOGS/tsc.log" \
+            "抜粋の \`ファイル(行,列): error TSxxxx\` の箇所を直してください。手元では \`$X tsc --noEmit\` で確認できます。\`Cannot find module\` は import のパスか、依存の入れ忘れが原因のことが多いです。"
+          [ "$ESLINT" = failure ] && section "Lint（ESLint）" "$LOGS/eslint.log" \
+            "手元で \`$X eslint . --fix\` を実行すると、自動で直せるものは直ります。残ったものは抜粋のルール名を見て手で直してください。"
+          [ "$PRETTIER" = failure ] && section "Format（Prettier）" "$LOGS/prettier.log" \
+            "手元で \`$X prettier --write \"**/*.{ts,tsx,js,jsx,mjs,cjs}\"\` を実行し、結果をコミットしてください。"
+          [ "$TEST" = failure ] && section "テスト" "$LOGS/test.log" \
+            "手元で \`$RUN test\` を実行して、失敗しているテストを再現してください。仕様を変えた場合はテストを直し、そうでなければ実装を直します。"
+          true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ci-report-typescript
+          path: ${{ runner.temp }}/ci-logs/report.md
+          if-no-files-found: ignore
+          retention-days: 3
 
   terraform:
     name: Terraform（fmt・validate）
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash -eo pipefail {0}
     steps:
       - uses: actions/checkout@v4
 
       - id: tf
         run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs" && echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
           if ls "${{ inputs.terraform-dir }}"/*.tf >/dev/null 2>&1; then echo "found=true" >> "$GITHUB_OUTPUT"; fi
 
       - uses: hashicorp/setup-terraform@v3
         if: steps.tf.outputs.found == 'true'
         with:
           terraform_version: ${{ inputs.terraform-version }}
+          terraform_wrapper: false
 
       - name: fmt
+        id: fmt
         if: steps.tf.outputs.found == 'true'
         working-directory: ${{ inputs.terraform-dir }}
-        run: terraform fmt -check -recursive
+        run: terraform fmt -check -recursive 2>&1 | tee "$LOGS/fmt.log"
 
       # backend とクラウドには接続しない（認証情報は使わない）
       - name: validate
-        if: steps.tf.outputs.found == 'true'
+        id: validate
+        if: (success() || failure()) && steps.tf.outputs.found == 'true'
         working-directory: ${{ inputs.terraform-dir }}
         run: |
-          terraform init -backend=false -input=false
-          terraform validate
+          terraform init -backend=false -input=false -no-color 2>&1 | tee "$LOGS/validate.log"
+          terraform validate -no-color 2>&1 | tee -a "$LOGS/validate.log"
+
+      - name: 失敗の内容をまとめる
+        if: failure()
+        env:
+          DIR: ${{ inputs.terraform-dir }}
+          FMT: ${{ steps.fmt.outcome }}
+          VALIDATE: ${{ steps.validate.outcome }}
+        run: |
+          out="$LOGS/report.md"
+          if [ "$FMT" = failure ]; then
+            {
+              echo "### ❌ Terraform fmt"
+              echo
+              echo "次のファイルの書式が揃っていません。\`cd $DIR && terraform fmt -recursive\` を実行し、結果をコミットしてください。"
+              echo
+              echo '```'
+              head -n 40 "$LOGS/fmt.log"
+              echo '```'
+              echo
+            } >> "$out"
+          fi
+          if [ "$VALIDATE" = failure ]; then
+            {
+              echo "### ❌ Terraform validate"
+              echo
+              echo "構文・参照・型の誤りがあります。抜粋の \`Error:\` と \`on <ファイル> line <行>\` の箇所を直してください。手元では \`cd $DIR && terraform init -backend=false && terraform validate\` で確認できます。"
+              echo
+              echo '<details><summary>エラーの抜粋</summary>'
+              echo
+              echo '```'
+              grep -A6 -E '^(Error|│ Error)' "$LOGS/validate.log" | head -n 40 || true
+              echo '```'
+              echo '</details>'
+              echo
+            } >> "$out"
+          fi
+          true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ci-report-terraform
+          path: ${{ runner.temp }}/ci-logs/report.md
+          if-no-files-found: ignore
+          retention-days: 3
 
   secrets:
     name: 秘密情報の検出
@@ -101,15 +215,122 @@ jobs:
 
       # state や変数ファイルには、平文の秘密情報や構成情報が入るため、コミットさせない
       - name: tfstate / tfvars / .env がコミットされていないか
+        id: tracked
         run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs" && echo "LOGS=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
           found=$(git ls-files '*.tfstate' '*.tfstate.*' '*.tfvars' '.env' '.env.*' '.clasprc.json' '*/.clasprc.json' | grep -vE '(^|/)\.env\.example$' || true)
           if [ -n "$found" ]; then
+            printf '%s\n' "$found" > "$RUNNER_TEMP/ci-logs/tracked.txt"
             echo "::error::コミットしてはいけないファイルがあります: $found"
             exit 1
           fi
 
-      # 結果はジョブのサマリーに出す。PR へのコメントは pull-requests: write が要るので使わない
+      # 結果はジョブのサマリーに出す。PR へのコメントは下でまとめて行う
       - uses: gitleaks/gitleaks-action@v2
+        id: gitleaks
+        if: success() || failure()
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITLEAKS_ENABLE_COMMENTS: "false"
+
+      # 秘密情報の値はコメントに載せない（ルール・ファイル・行・コミットだけ）
+      - name: 失敗の内容をまとめる
+        if: failure()
+        env:
+          TRACKED: ${{ steps.tracked.outcome }}
+          GITLEAKS: ${{ steps.gitleaks.outcome }}
+        run: |
+          out="$LOGS/report.md"
+          if [ "$TRACKED" = failure ]; then
+            {
+              echo "### ❌ コミットしてはいけないファイル"
+              echo
+              echo "state・変数ファイル・.env には、平文の秘密情報が入ります。次を行ってください。"
+              echo
+              echo "1. \`git rm --cached <ファイル>\` で追跡から外し、\`.gitignore\` に入っているか確認してコミットする（手元のファイルは消えません）。"
+              echo "2. 中に秘密情報（トークン・パスワード・鍵）が入っていた場合は、その値を無効化して作り直す。履歴に残るため、外すだけでは足りません。"
+              echo
+              echo '```'
+              head -n 20 "$LOGS/tracked.txt"
+              echo '```'
+              echo
+            } >> "$out"
+          fi
+          if [ "$GITLEAKS" = failure ]; then
+            {
+              echo "### ❌ 秘密情報らしき文字列（gitleaks）"
+              echo
+              echo "| ルール | ファイル:行 | コミット |"
+              echo "| --- | --- | --- |"
+              if [ -f results.sarif ]; then
+                jq -r '.runs[0].results[] | "| \(.ruleId) | `\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)` | \((.partialFingerprints.commitSha // "")[0:7]) |"' results.sarif | head -n 20
+              else
+                echo "| （詳細は Actions の Summary を参照） | | |"
+              fi
+              echo
+              echo "- **本物の秘密情報の場合:** すぐにその値を無効化して作り直してください。ファイルから消しても、過去のコミットに残ります。"
+              echo "- **誤検知の場合**（サンプル値・テンプレートのダミーなど）: その行を消すか、Actions の Summary にある Fingerprint をリポジトリ直下の \`.gitleaksignore\` に 1 行で追加してください。"
+              echo
+            } >> "$out"
+          fi
+          true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ci-report-secrets
+          path: ${{ runner.temp }}/ci-logs/report.md
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # 失敗のまとめを 1 つのコメントにして PR に載せる。次の実行で成功したら、同じコメントを「解消」に書き換える。
+  # 呼び出し側（team-ci.yml）に pull-requests: write がない場合や fork の PR では、コメントせずに終わる。
+  report:
+    name: 結果を PR にコメント
+    needs: [typescript, terraform, secrets]
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ci-report-*
+          path: reports
+        continue-on-error: true
+
+      - name: コメントを書く
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          marker='<!-- cosmos-ci-report -->'
+          existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq ".[] | select(.user.type == \"Bot\" and (.body | startswith(\"$marker\"))) | .id" | tail -n 1)
+          body="$RUNNER_TEMP/body.md"
+          if [ "$FAILED" = true ]; then
+            {
+              echo "$marker"
+              echo "## CI が失敗しました（${SHA:0:7}）"
+              echo
+              find reports -name report.md -exec cat {} + 2>/dev/null
+              if ! find reports -name report.md 2>/dev/null | grep -q .; then
+                echo "失敗したチェックのまとめを作れませんでした（タイムアウトや取り消しなど）。[実行ログ]($RUN_URL) を確認してください。"
+                echo
+              fi
+              echo "---"
+              echo "直したら push すると、CI が再実行されてこのコメントが更新されます。直し方がわからないときは、この PR に \`@claude fix CI の失敗を直して\` とコメントすると修正 PR が作られます。 [実行ログ]($RUN_URL)"
+            } > "$body"
+          elif [ -n "$existing" ]; then
+            printf '%s\n## CI の失敗は解消しました（%s）\n\nすべてのチェックが成功しています。 [実行ログ](%s)\n' "$marker" "${SHA:0:7}" "$RUN_URL" > "$body"
+          else
+            exit 0
+          fi
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing" -F body=@"$body" >/dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@"$body" >/dev/null
+          fi || echo "::warning::PR にコメントできませんでした。team-ci.yml の permissions に pull-requests: write があるか確認してください。"
