@@ -1,0 +1,25 @@
+# {{COSMOS_REPO}} で管理。このリポジトリでは編集しない
+# PR に「@claude fix [追加の指示]」とコメントすると、レビュー指摘を直した修正 PR を元の PR のブランチに向けて作る。
+name: team-claude-fix
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: claude-fix-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    if: |
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '@claude fix') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: "{{COSMOS_REPO}}/.github/workflows/claude-fix.yml@main"
+    secrets: inherit

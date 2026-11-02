@@ -1,0 +1,20 @@
+# {{COSMOS_REPO}} で管理。このリポジトリでは編集しない
+# 型チェック・lint・format・テスト、Terraform の fmt / validate、秘密情報の検出を PR ごとに行う。
+name: team-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: team-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: "{{COSMOS_REPO}}/.github/workflows/ci.yml@main"

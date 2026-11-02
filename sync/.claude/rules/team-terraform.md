@@ -5,7 +5,7 @@ paths:
 owner: "@Shi-Shi-Ki"
 last-reviewed: 2026-10-31
 ---
-<!-- Shi-Shi-Ki/cosmos で管理。このリポジトリでは編集しない -->
+<!-- {{COSMOS_REPO}} で管理。このリポジトリでは編集しない -->
 # Terraform
 
 - provider のバージョンは required_providers で ~> により固定する

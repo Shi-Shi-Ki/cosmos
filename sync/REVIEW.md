@@ -1,4 +1,4 @@
-<!-- Shi-Shi-Ki/cosmos で管理。このリポジトリでは編集しない。固有の観点はサブディレクトリの REVIEW.md に書く -->
+<!-- {{COSMOS_REPO}} で管理。このリポジトリでは編集しない。固有の観点はサブディレクトリの REVIEW.md に書く -->
 # Review guidelines
 
 ## 重大度の定義
