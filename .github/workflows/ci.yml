@@ -95,7 +95,8 @@ jobs:
                 echo '```'
                 clean=$(sed 's/\x1b\[[0-9;]*m//g' "$2")
                 # エラーらしい行だけを出す。見つからなければ末尾を出す
-                printf '%s\n' "$clean" | grep -E -i 'error|fail|warn|✕|●|\[warn\]' | head -n 40 || printf '%s\n' "$clean" | tail -n 20
+                hits=$(printf '%s\n' "$clean" | grep -E -i 'error|fail|warn|✕|●|\[warn\]' || true)
+                if [ -n "$hits" ]; then printf '%s\n' "$hits" | head -n 40; else printf '%s\n' "$clean" | tail -n 20; fi
                 echo '```'
                 echo '</details>'
                 echo
