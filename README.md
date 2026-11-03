@@ -147,6 +147,16 @@ paths:
 | `@claude review terraform/ だけ` | 後ろの文で範囲・観点を絞る |
 | `@claude fix [追加の指示]` | 指摘を直した修正 PR を、元の PR のブランチに向けて作る |
 
+`@claude review` の流れ（`claude-review.yml`）:
+
+1. **デフォルトブランチ**をチェックアウトする。レビューの基準はここから読む。PR の中で基準を書き換えても、そのレビューには効かない。
+2. PR の差分（`gh pr diff`）と、PR のブランチのコードを、作業ディレクトリの外（`$RUNNER_TEMP/claude-review/`）に置く。
+3. 基準を集めて 1 つのファイル（`criteria.md`）にする: ルートの REVIEW.md、変更されたファイルの親ディレクトリにある REVIEW.md、`.claude/rules/*.md`。CLAUDE.md は Claude Code が自動で読む。
+4. Claude が基準と差分を読み、指摘を行ごとにコメントする（重大度は REVIEW.md の Important / Nit）。
+5. 最後に要約をコメントする。要約の「使った基準」で、どのファイルを基準にしたかを確かめられる。
+
+公式の code-review plugin は使っていません。CLAUDE.md だけを基準にする作りで、REVIEW.md が届かず、テスト不足や一般的なセキュリティの問題を指摘しない設定になっているためです。
+
 - CI（`team-ci.yml`）が調べるのは、フレームワークやツールに依存しない最低限のことだけです。何を使って lint・テストするかは、各リポジトリが `package.json` / `composer.json` の `scripts` で決めます（cosmos はツールを知らなくてよい）。
 
   | 対象 | cosmos が調べること |
