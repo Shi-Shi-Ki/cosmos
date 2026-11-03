@@ -65,15 +65,36 @@ cosmos/
 1. 同期 PR（`chore: 共通 Claude 設定の同期`）をマージする。REVIEW.md、`.claude/rules/team-*.md`、`.github/workflows/team-*.yml` が入ります。
    - workflow を動かすには、そのリポジトリの Secrets に `CLAUDE_CODE_OAUTH_TOKEN` を登録し、https://github.com/apps/claude をインストールする。
    - `@claude fix` を使うには、Settings → Actions → General で「Allow GitHub Actions to create and approve pull requests」を有効にする。
-2. Claude Code（CLI または VS Code）で plugin を入れる。先頭の `/` を付けてコマンドとして実行する（付けないと Claude への依頼として扱われる）。
+2. plugin を、各自の PC に**無効の状態で**入れる（1 人 1 回。全リポジトリで共通）。plugin は、リポジトリの `.claude/settings.json` で有効にしたリポジトリでだけ動かします（詳しくは下の「plugin が有効になる範囲」）。
 
-   ```
-   /plugin marketplace add Shi-Shi-Ki/cosmos
-   /plugin install team-dev@cosmos
+   ```sh
+   claude plugin marketplace add Shi-Shi-Ki/cosmos
+   claude plugin install team-dev@cosmos
    ```
 
-3. 対象リポジトリで `/team-dev:team-init` を実行し、CLAUDE.md と `.claude/settings.json` を生成してコミットする。以降は settings.json に書かれた marketplace から、他のメンバーにも plugin のインストールが促されます。
+   入れたあと、`~/.claude/settings.json` の `enabledPlugins` で `"team-dev@cosmos": false` にする（`claude plugin install` は既定でユーザースコープに入れ、全プロジェクトで有効にするため）。
+
+3. 対象リポジトリで `/team-dev:team-init` を実行し、CLAUDE.md と `.claude/settings.json` を生成してコミットする。手順 2 で無効にしているので、初回だけ `.claude/settings.local.json`（コミットしない）に `{"enabledPlugins": {"team-dev@cosmos": true}}` を書いてから実行する。settings.json をコミットしたら、settings.local.json のこの行は消してよい。
 4. 固有のレビュー観点があれば、サブディレクトリの REVIEW.md（例: `infra/REVIEW.md`）か `.claude/rules/local-*.md` に書く。
+
+### plugin が有効になる範囲
+
+plugin（hooks と skills）が動くかどうかは、設定ファイルの `enabledPlugins` で決まります。同じ plugin を複数のファイルが書いている場合は、優先順位の高いファイルの値が使われます（低い順に）。
+
+| ファイル | 範囲 |
+| --- | --- |
+| `~/.claude/settings.json` | 自分の PC の全プロジェクト |
+| `.claude/settings.json`（コミットする） | そのリポジトリを使う全員 |
+| `.claude/settings.local.json`（コミットしない） | 自分の、そのリポジトリだけ |
+| 組織の managed settings | 全員。ほかのファイルでは上書きできない |
+
+手順 2 のとおり `~/.claude/settings.json` で `false` にしておくと、team-init が作る `.claude/settings.json` の `true` があるリポジトリでだけ有効になります。cosmos を入れていないリポジトリや、個人の作業には何も効きません。
+
+- `.claude/settings.json` で有効にしても、plugin は自動ではダウンロードされません。入れていない人の環境では、`/plugin` の Errors タブに「enabled in project settings but isn't installed here」と出ます。手順 2 を済ませてもらってください。
+- `extraKnownMarketplaces` は、そのフォルダを信頼（trust）したあとに効きます。
+- 特定のリポジトリで自分だけ止めたいときは、`.claude/settings.local.json` で `false` にします。
+
+根拠: Claude Code のドキュメント [Install and manage plugins](https://code.claude.com/docs/en/discover-plugins)、[plugin の読み込み](https://code.claude.com/docs/en/plugins/loading)（2026-11-03 時点）
 
 ### 共通の基準とリポジトリ固有の基準が相反するとき
 
